@@ -40,8 +40,9 @@ SNAPSHOT_FIELDS: dict[str, list[str]] = {
     "Corridor": ["status", "status_reason", "status_source", "risk_score", "p_close_30d",
                  "expected_duration_days", "war_risk_pct"],
     # what a human sees on a route card: stored with every approval
-    "RouteOption": ["id", "kind", "label", "transit_days", "days_p10", "days_p90", "delay_days", "landed_cost",
-                    "co2_kg", "risk_score", "score", "cost_breakdown", "possible_disruptions", "recommended", "run_id"],
+    "RouteOption": ["id", "key", "kind", "label", "transit_days", "days_p10", "days_p90", "delay_days", "landed_cost",
+                    "co2_kg", "risk_score", "score", "cost_breakdown", "possible_disruptions", "break_even_days",
+                    "infeasible_reason", "recommended", "run_id"],
     "PreApproval": ["status", "amount_cap", "categories", "route_option_id", "decided_by_id", "note"],
     "PendingAction": ["action_type", "status", "payload", "decided_by_id", "note"],
     "Issue": ["code", "severity", "resolved", "resolution", "resolution_note", "resolved_by_id"],

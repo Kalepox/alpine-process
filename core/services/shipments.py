@@ -53,31 +53,62 @@ REQUEST_FIELDS = ["mode", "cargo", "quantity", "unit", "cargo_value", "origin", 
                   "origin_latlon", "dest_latlon", "hs_code", "origin_country", "incoterm"]
 
 
-def create_planning_shipment(request: dict, *, user) -> Shipment:
-    """perm core.add_shipment. A shipment in PLANNING (no route yet), built from a
-    RoutingRequest dict; the full request is kept in Shipment.request.
+def _place_latlon(name: str) -> list[float] | None:
+    """Coordinates of a place B's transport network knows ("Antofagasta", "Milan plant")."""
+    try:
+        from autopilot.domain.network import LOCATIONS, default_graph
+    except Exception:
+        return None
+    try:
+        loc = LOCATIONS[default_graph().resolve(name)]
+    except Exception:
+        return None
+    return [loc.lat, loc.lon]
 
-    Known keys: ref, mode, cargo, quantity, unit, cargo_value, origin, destination,
-    origin_latlon, dest_latlon, needed_by (-> deadline, ISO date), hs_code,
-    origin_country, incoterm. Anything else (goal, weights, ...) is only stored.
+
+def create_planning_shipment(request: dict, *, user) -> Shipment:
+    """perm core.add_shipment. A shipment in PLANNING (no route yet); the request is kept
+    in Shipment.request for plan_routes (B).
+
+    Accepts B's RoutingRequest dict ({"origin", "destination", "cargo": {"description",
+    "cargo_class", "weight_t", "value_eur"}, "deadline", "preset", ...}, optionally with
+    "text") and the flat form ({"cargo": "Copper", "quantity", "cargo_value", "needed_by", ...}).
+    Extra keys (ref, mode, origin_latlon, hs_code ...) fill the Shipment and are kept.
+    Missing coordinates are looked up in B's network so the map can show the shipment.
     """
     if user is None or not user.is_authenticated or not user.has_perm("core.add_shipment"):
         raise PermissionDenied(f"user {getattr(user, 'username', None)!r} lacks permission core.add_shipment")
+    request = dict(request)
+    cargo = request.get("cargo")
+    if isinstance(cargo, dict):  # B's RoutingRequest
+        flat = {"cargo": cargo.get("description", ""), "quantity": cargo.get("weight_t"), "unit": "mt",
+                "cargo_value": cargo.get("value_eur"), "needed_by": request.get("deadline")}
+    else:  # flat form: also store it as a RoutingRequest so B can plan it
+        flat = {"cargo": cargo, "quantity": request.get("quantity"), "unit": request.get("unit", "mt"),
+                "cargo_value": request.get("cargo_value"), "needed_by": request.get("needed_by")}
+        weight_t = float(request.get("quantity") or 0) / (1000 if request.get("unit") == "kg" else 1)
+        request["cargo"] = {"description": cargo or "", "weight_t": weight_t or 1.0,
+                            "value_eur": str(request.get("cargo_value") or 0)}
+        if request.get("needed_by") and not request.get("deadline"):
+            request["deadline"] = request["needed_by"]
     for key in ("cargo", "origin", "destination"):
-        if not request.get(key):
+        if not (flat.get(key) if key == "cargo" else request.get(key)):
             raise ValueError(f"routing request needs {key!r}")
-    fields = {k: request[k] for k in REQUEST_FIELDS if request.get(k) not in (None, "")}
+
+    fields = {k: request[k] for k in REQUEST_FIELDS if k not in ("cargo", "quantity", "unit", "cargo_value")
+              and request.get(k) not in (None, "")}
     fields.setdefault("mode", "SEA")
-    fields["quantity"] = Decimal(str(request.get("quantity") or 0))
-    fields["cargo_value"] = Decimal(str(request.get("cargo_value") or 0))
-    needed_by = request.get("needed_by")
-    ref = request.get("ref") or f"{request['cargo']} · {request['origin']} → {request['destination']}"
+    fields["origin_latlon"] = fields.get("origin_latlon") or _place_latlon(request["origin"])
+    fields["dest_latlon"] = fields.get("dest_latlon") or _place_latlon(request["destination"])
+    needed_by = flat.get("needed_by")
+    ref = request.get("ref") or f"{flat['cargo']} · {request['origin']} → {request['destination']}"
 
     with transaction.atomic():
         shipment = Shipment.objects.create(
             ref=ref[:80], status=Shipment.Status.PLANNING, request=audit.json_safe(request),
             deadline=datetime.fromisoformat(needed_by).date() if isinstance(needed_by, str) else needed_by,
-            **fields,
+            cargo=flat["cargo"], quantity=Decimal(str(flat.get("quantity") or 0)), unit=flat.get("unit") or "mt",
+            cargo_value=Decimal(str(flat.get("cargo_value") or 0)), **fields,
         )
         audit.log(
             "shipment.planning_created", actor_type="user", actor_name=user.get_username(), actor_user=user,
@@ -349,18 +380,32 @@ def _dec(value, default="0") -> Decimal:
     return Decimal(str(value if value not in (None, "") else default))
 
 
+def _legs_geometry(legs: list[dict]) -> dict | None:
+    """B's legs carry their own geometry ([[lon, lat], ...]): one LineString Feature per leg."""
+    if not legs or not any(leg.get("geometry") for leg in legs):
+        return None
+    return {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"leg": i, "mode": leg.get("mode", "")},
+         "geometry": {"type": "LineString", "coordinates": [list(c) for c in leg.get("geometry") or []]}}
+        for i, leg in enumerate(legs)
+    ]}
+
+
 def save_route_options(
     shipment: Shipment, options: list[RouteOptionDTO], *, run: AgentRun | None, actor_name: str
 ) -> list[RouteOption]:
-    """Persist the agent's proposals for one run. Never chooses, never deletes
-    (what a human was shown stays in the trail).
+    """Persist the solver's proposals for one run, in input order. Never chooses, never
+    deletes (what a human was shown stays in the trail).
 
-    * every corridor code in legs must exist
-    * `contingency` in a DTO is the index of another option in the same list
-    * a WAIT option without geometry inherits the current route's legs/geometry
+    * legs are stored as given (B's Leg: from_node, to_node, mode, km, days, corridors,
+      geometry [[lon, lat]]) so replan can read them back; every corridor code must exist
+    * route geometry: the DTO's `geometry` if any, else built from the legs' geometry
+    * `contingency_key` ("R2") or `contingency` (list index) points at another option of the same list
+    * a WAIT option without legs inherits the current route's legs/geometry
+    * "CARRYING" in cost_breakdown is inventory cost: stored on the option, never booked as spend
     """
     known = set(Corridor.objects.values_list("code", flat=True))
-    rows = [opt.model_dump() if hasattr(opt, "model_dump") else dict(opt) for opt in options]
+    rows = [opt.model_dump(mode="python") if hasattr(opt, "model_dump") else dict(opt) for opt in options]
     for data in rows:
         unknown = {c for leg in data.get("legs") or [] for c in leg.get("corridors", [])} - known
         if unknown:
@@ -372,12 +417,13 @@ def save_route_options(
         current = shipment.route if shipment.route_id else None
         saved: list[RouteOption] = []
         for data in rows:
-            legs, geometry = data.get("legs") or [], data.get("geometry")
-            if data.get("kind") == RouteOption.Kind.WAIT and not geometry and current is not None:
+            legs = data.get("legs") or []
+            geometry = data.get("geometry") or _legs_geometry(legs)
+            if data.get("kind") == RouteOption.Kind.WAIT and not legs and current is not None:
                 legs, geometry = current.legs, current.geometry
             saved.append(RouteOption.objects.create(
-                shipment=shipment, run=run, kind=data.get("kind", RouteOption.Kind.ROUTE), label=data["label"],
-                legs=audit.json_safe(legs), geometry=normalize_geometry(geometry),
+                shipment=shipment, run=run, kind=data.get("kind", RouteOption.Kind.ROUTE), key=data.get("key") or "",
+                label=data["label"], legs=audit.json_safe(legs), geometry=normalize_geometry(geometry),
                 transit_days=_dec(data.get("transit_days")),
                 days_p10=_dec(data["days_p10"]) if data.get("days_p10") is not None else None,
                 days_p90=_dec(data["days_p90"]) if data.get("days_p90") is not None else None,
@@ -386,15 +432,25 @@ def save_route_options(
                 landed_cost=_dec(data.get("landed_cost")), co2_kg=_dec(data.get("co2_kg")),
                 risk_score=_dec(data.get("risk_score")), score=audit.json_safe(data.get("score") or {}),
                 possible_disruptions=audit.json_safe(data.get("possible_disruptions") or []),
+                break_even_days=_dec(data["break_even_days"]) if data.get("break_even_days") is not None else None,
+                infeasible_reason=data.get("infeasible_reason") or "",
                 rationale=data.get("rationale", ""), recommended=bool(data.get("recommended")),
                 created_by=actor_name,
             ))
+        by_key = {o.key: o for o in saved if o.key}
         for option, data in zip(saved, rows):
-            idx = data.get("contingency")
-            if idx is not None:
-                if not (0 <= int(idx) < len(saved)) or int(idx) == saved.index(option):
+            target = None
+            if data.get("contingency_key"):
+                target = by_key.get(data["contingency_key"])
+                if target is None:
+                    raise ValueError(f"route option {option.label!r}: unknown contingency_key {data['contingency_key']!r}")
+            elif data.get("contingency") is not None:
+                idx = int(data["contingency"])
+                if not (0 <= idx < len(saved)) or idx == saved.index(option):
                     raise ValueError(f"route option {option.label!r}: bad contingency index {idx}")
-                option.contingency = saved[int(idx)]
+                target = saved[idx]
+            if target is not None:
+                option.contingency = target
                 option.save(update_fields=["contingency"])
         audit.log(
             "route_options.saved", actor_type=_actor_type_for(actor_name, "agent"), actor_name=actor_name,
@@ -403,3 +459,17 @@ def save_route_options(
             detail=f"{len(saved)} option(s)" + (f", recommended: {next((o.label for o in saved if o.recommended), '-')}"),
         )
     return saved
+
+
+def update_shipment_request(shipment: Shipment, request: dict, *, actor_name: str, run: AgentRun | None = None) -> Shipment:
+    """Replace Shipment.request (e.g. with the RoutingRequest the intent agent parsed). Audited.
+    Keeps A's "tracking" info (followed flight) if the new request doesn't carry it."""
+    before = dict(shipment.request or {})
+    new = audit.json_safe(dict(request))
+    if "tracking" in before and "tracking" not in new:
+        new["tracking"] = before["tracking"]
+    shipment.request = new
+    shipment.save(update_fields=["request", "updated_at"])
+    audit.log("shipment.request_updated", actor_type=_actor_type_for(actor_name, "agent"), actor_name=actor_name,
+              run=run, shipment=shipment, before=before, after=new)
+    return shipment

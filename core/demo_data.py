@@ -87,6 +87,12 @@ CORRIDORS = [
          geometry=_line((18.4, -34.4), (19.2, -34.85), (20.0, -34.8))),
     dict(code="BRENNER", name="Brenner Pass", mode="ROAD", risk_score=D("0.150"), p_close_30d=D("0.040"),
          geometry=_line((11.5, 47.27), (11.5, 47.0), (11.33, 46.5))),
+    dict(code="GOTTHARD", name="Gotthard Road Tunnel", mode="ROAD", risk_score=D("0.150"), p_close_30d=D("0.050"),
+         geometry=_line((8.59, 46.66), (8.60, 46.60), (8.60, 46.53))),
+    dict(code="MONT_BLANC", name="Mont Blanc Tunnel", mode="ROAD", risk_score=D("0.150"), p_close_30d=D("0.050"),
+         geometry=_line((6.86, 45.92), (6.90, 45.88), (6.95, 45.83))),
+    dict(code="FREJUS", name="Fréjus Road Tunnel", mode="ROAD", risk_score=D("0.200"), p_close_30d=D("0.080"),
+         geometry=_line((6.68, 45.15), (6.67, 45.12), (6.66, 45.08))),
     dict(code="KAZ_RUS_BORDER", name="Kazakhstan–Russia border", mode="RAIL", risk_score=D("0.700"),
          p_close_30d=D("0.400"), status="RESTRICTED",
          status_reason="Transit via Russia: sanctions screening required, long border dwell times",
@@ -106,15 +112,14 @@ BUDGETS = {
 }
 
 # --------------------------------------------------------------------------
-# Shipments in transit (5–7). Each gets an approved route (seed_demo runs it through
-# save_route_options + approve_route): `path` is the hand-drawn route [[lat, lon], ...]
-# from origin to destination, `corridors` the chokepoints it passes.
+# Shipments in transit (5–7). seed_demo plans each with B's plan_routes (`plan`: places
+# B's network knows + cargo class), picks the option passing the `prefer` corridors
+# (so the scenario keeps its Red Sea ships) and has marco approve it.
 # departed / eta / deadline are day offsets from now.
 # --------------------------------------------------------------------------
 SHIPMENTS = [
-    dict(ref="MV Atacama Star", mode="SEA", corridors=["PANAMA"], route_label="Antofagasta → Panama → Rotterdam",
-         path=[[-23.65, -70.40], [-12.0, -78.0], [0.0, -81.0], [8.9, -79.5], [9.4, -79.9], [18.0, -75.0],
-               [26.0, -60.0], [38.0, -30.0], [46.0, -8.0], [49.5, -3.0], [51.95, 4.05]],
+    dict(ref="MV Atacama Star", plan=dict(origin="Antofagasta", destination="Rotterdam", cargo_class="CONTAINER_GENERAL"), prefer=['PANAMA'],
+         mode="SEA",
          cargo="Copper cathodes", quantity=D("12000"), unit="mt", cargo_value=D("106800000"),
          origin="Antofagasta, CL", origin_latlon=[-23.65, -70.40], destination="Rotterdam, NL", dest_latlon=[51.95, 4.05],
          departed=-18, eta=9, deadline=12, demurrage_per_day=D("28000"),
@@ -123,10 +128,8 @@ SHIPMENTS = [
          preferential_origin_claimed=True, customs_status="DOCS_PENDING",
          quoted={"FREIGHT": D("456000"), "INSURANCE": D("106800"), "INSPECTION": D("9600"),
                  "PORT": D("38500"), "CUSTOMS": D("3200"), "DEMURRAGE": D("0")}),
-    dict(ref="MT Aurelia Grace", mode="SEA", corridors=["MALACCA", "BAB_EL_MANDEB", "SUEZ"],
-         route_label="Belawan → Bab-el-Mandeb → Suez → Mersin",
-         path=[[3.78, 98.69], [5.9, 95.3], [5.5, 80.5], [12.0, 51.0], [12.6, 43.4], [20.0, 38.5], [27.9, 33.6],
-               [30.0, 32.55], [31.3, 32.3], [36.78, 34.63]],
+    dict(ref="MT Aurelia Grace", plan=dict(origin="Belawan", destination="Mersin", cargo_class="LIQUID_BULK"), prefer=['BAB_EL_MANDEB', 'SUEZ'],
+         mode="SEA",
          cargo="Crude palm oil", quantity=D("8000"), unit="mt", cargo_value=D("7640000"),
          origin="Belawan, ID", origin_latlon=[3.78, 98.69], destination="Mersin, TR", dest_latlon=[36.78, 34.63],
          departed=-12, eta=11, deadline=14, demurrage_per_day=D("18500"),
@@ -134,9 +137,8 @@ SHIPMENTS = [
          hs_code="1511.10", origin_country="ID", incoterm="CFR", customs_status="NOT_STARTED",
          quoted={"FREIGHT": D("312000"), "INSURANCE": D("11460"), "WAR_RISK": D("0"), "INSPECTION": D("6200"),
                  "PORT": D("21000"), "DEMURRAGE": D("0")}),
-    dict(ref="MV Karoo Spirit", mode="SEA", corridors=["MALACCA"], route_label="Dar es Salaam → Malacca → Qingdao",
-         path=[[-6.82, 39.29], [-2.0, 50.0], [5.5, 80.5], [5.9, 95.3], [1.26, 103.8], [10.0, 110.0], [22.0, 117.0],
-               [30.0, 123.0], [36.07, 120.32]],
+    dict(ref="MV Karoo Spirit", plan=dict(origin="Dar es Salaam", destination="Qingdao", cargo_class="DRY_BULK"), prefer=['MALACCA'],
+         mode="SEA",
          cargo="Copper concentrate", quantity=D("25000"), unit="mt", cargo_value=D("62500000"),
          origin="Dar es Salaam, TZ", origin_latlon=[-6.82, 39.29], destination="Qingdao, CN", dest_latlon=[36.07, 120.32],
          departed=-4, eta=16, eta_slip_days=3, deadline=20, demurrage_per_day=D("22000"),
@@ -145,27 +147,25 @@ SHIPMENTS = [
                  "DEMURRAGE": D("0")},
          alert=dict(code="ETA_SLIP", severity="warn",
                     message="Departure slipped 3 days (berth congestion at Dar es Salaam). Route decision pending.")),
-    dict(ref="MV Sundara Bay", mode="SEA", corridors=["MALACCA", "BAB_EL_MANDEB", "SUEZ"],
-         route_label="Dumai → Bab-el-Mandeb → Suez → Genoa",
-         path=[[1.68, 101.45], [5.9, 95.3], [5.5, 80.5], [12.0, 51.0], [12.6, 43.4], [20.0, 38.5], [27.9, 33.6],
-               [30.0, 32.55], [31.3, 32.3], [33.8, 25.0], [37.2, 11.5], [41.0, 9.8], [44.41, 8.92]],
+    dict(ref="MV Sundara Bay", plan=dict(origin="Belawan", destination="Genoa", cargo_class="LIQUID_BULK"), prefer=['BAB_EL_MANDEB', 'SUEZ'],
+         mode="SEA",
          cargo="Crude palm oil", quantity=D("6500"), unit="mt", cargo_value=D("6207500"),
-         origin="Dumai, ID", origin_latlon=[1.68, 101.45], destination="Genoa, IT", dest_latlon=[44.41, 8.92],
+         origin="Belawan, ID", origin_latlon=[3.78, 98.69], destination="Genoa, IT", dest_latlon=[44.41, 8.92],
          departed=-10, eta=11, deadline=13, demurrage_per_day=D("16000"),
          hs_code="1511.10", origin_country="ID", incoterm="FOB",
          freight_cost_for_customs=D("247000"), insurance_cost_for_customs=D("9300"),
          preferential_origin_claimed=True, customs_status="DOCS_PENDING",
          quoted={"FREIGHT": D("247000"), "INSURANCE": D("9300"), "WAR_RISK": D("0"), "INSPECTION": D("5100"),
                  "PORT": D("17800"), "CUSTOMS": D("2800"), "DEMURRAGE": D("0")}),
-    dict(ref="AWB 176-2290", mode="AIR", corridors=["AIR_GULF"], route_label="Dubai → Istanbul (air)",
-         path=[[25.25, 55.36], [29.3, 47.9], [33.3, 44.4], [37.0, 35.3], [41.26, 28.74]],
+    dict(ref="AWB 176-2290", plan=dict(origin="Dubai", destination="Istanbul", cargo_class="HIGH_VALUE"), prefer=['AIR_GULF'],
+         mode="AIR",
          cargo="Gold bars", quantity=D("250"), unit="kg", cargo_value=D("18750000"),
          origin="Dubai, AE", origin_latlon=[25.25, 55.36], destination="Istanbul, TR", dest_latlon=[41.26, 28.74],
          departed_hours=-3, eta_hours=3, demurrage_per_day=D("0"),
          hs_code="7108.12", origin_country="AE", incoterm="DAP", customs_status="NOT_STARTED",
          quoted={"FREIGHT": D("9800"), "INSURANCE": D("18750"), "INSPECTION": D("2400"), "PORT": D("1200")}),
-    dict(ref="TRK GX-482-T", mode="ROAD", corridors=[], route_label="Rotterdam → Gotthard → Milan (road)",
-         path=[[51.95, 4.05], [50.94, 6.96], [49.0, 8.4], [47.56, 7.59], [46.0, 8.95], [45.46, 9.19]],
+    dict(ref="TRK GX-482-T", plan=dict(origin="Rotterdam", destination="Milan", cargo_class="CONTAINER_GENERAL"), prefer=[],
+         mode="ROAD",
          cargo="Copper cathodes", quantity=D("24"), unit="mt", cargo_value=D("213600"),
          origin="Rotterdam, NL", origin_latlon=[51.95, 4.05], destination="Milan, IT", dest_latlon=[45.46, 9.19],
          departed_hours=-20, eta_hours=10, demurrage_per_day=D("0"),
@@ -175,11 +175,11 @@ SHIPMENTS = [
 
 # One shipment waiting for a route: demo step 2 ("Plan a shipment"). B's plan_routes
 # proposes the options; it's created through shipments.create_planning_shipment.
-PLANNING_REQUEST = dict(
+PLANNING_REQUEST = dict(  # B's RoutingRequest + Shipment extras
     ref="Copper 40 t · Antofagasta → Milan", mode="SEA",
-    cargo="Copper cathodes", quantity=D("40"), unit="mt", cargo_value=D("356000"),
-    origin="Antofagasta, CL", origin_latlon=[-23.65, -70.40], destination="Milan plant, IT", dest_latlon=[45.46, 9.19],
-    needed_by_days=72, goal="Balanced", hs_code="7403.11", origin_country="CL", incoterm="FOB",
+    origin="Antofagasta", destination="Milan plant",
+    cargo=dict(description="Copper cathodes", cargo_class="CONTAINER_GENERAL", weight_t=40, value_eur="356000"),
+    needed_by_days=72, preset="BEST", hs_code="7403.11", origin_country="CL", incoterm="FOB",
 )
 
 # --------------------------------------------------------------------------

@@ -59,6 +59,9 @@ DOC_TRANSITIONS: dict[str, set[str]] = {
     S.REJECTED: set(),
     S.EXPORTED: set(),
 }
+# Cost-breakdown keys that are not invoiced spend (kept on the option, never booked to CostLine).
+NOT_SPEND = {"CARRYING"}
+
 # Targets only a human path may reach: APPROVED via decide_payment, EXPORTED via
 # export.build_export_batch, REJECTED via resolve_issue / decide_payment.
 HUMAN_ONLY_TARGETS = {S.APPROVED, S.EXPORTED, S.REJECTED}
@@ -168,6 +171,8 @@ def approve_route(route_option_id: int, user, note: str = "") -> Shipment:
 
         totals: dict[str, Decimal] = {}
         for key, value in (option.cost_breakdown or {}).items():
+            if key.upper() in NOT_SPEND:
+                continue
             cat = _to_category(key)
             totals[cat] = totals.get(cat, Decimal("0")) + _money(value)
         cost_lines = {}

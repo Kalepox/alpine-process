@@ -234,19 +234,21 @@ def add_planned_shipment(user, name, cargo, plan):
         "via_port": plan["port"],
     }
     s = _call(shipments.create_planning_shipment, request, user=u)
-    legs = [{"from": request["origin"] if i == 0 else plan["port"], "to": plan["port"] if i == 0 else plan["destination"],
-             "mode": "ROAD" if leg["mode"] != "SEA" else "SEA", "km": leg["km"], "days": leg["days"], "corridors": []}
+    legs = [{"from_node": request["origin"] if i == 0 else plan["port"],
+             "to_node": plan["port"] if i == 0 else plan["destination"],
+             "mode": "ROAD" if leg["mode"] != "SEA" else "SEA", "km": leg["km"], "days": leg["days"], "corridors": [],
+             "geometry": [[pt[1], pt[0]] for pt in leg["coords"]]}  # B's Leg: GeoJSON [lon, lat]
             for i, leg in enumerate(plan["legs"])]
     from autopilot.domain.schemas import RouteOptionDTO
-    from core.geo import feature_collection
 
     run = audit.start_run(AgentRun.Pipeline.PLAN_ROUTES, trigger="user", triggered_by=u, shipment=s,
                           input={"start": plan["start"], "destination": plan["destination"]},
                           model="searoute (no LLM)", prompt_version="ui-planner")
+    days = float(plan["total_days"])
     [option] = _call(shipments.save_route_options, s, [RouteOptionDTO.model_validate(dict(
-        label=f"Via {plan['port']}", legs=legs, geometry=feature_collection([l["coords"] for l in plan["legs"]], legs),
-        transit_days=D(str(plan["total_days"])), rationale="Computed by the UI planner (sea lanes + road).",
-        recommended=True,
+        key="P1", label=f"Via {plan['port']}", legs=legs, transit_days=days, days_p10=days, days_p90=days,
+        landed_cost=D("0"), co2_kg=0.0, risk_score=0.0,
+        rationale="Computed by the UI planner (sea lanes + road).", recommended=True,
     ))], run=run, actor_name="web.routing")
     audit.finish_run(run, AgentRun.Status.OK, summary=f"1 option via {plan['port']}")
     if user.get("is_manager"):

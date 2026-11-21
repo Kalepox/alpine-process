@@ -347,6 +347,7 @@ class AgentRun(models.Model):
         PLAN_ROUTES = "plan_routes"
         SCAN_DISRUPTIONS = "scan_disruptions"
         REPLAN = "replan"
+        MONITOR = "monitor"
         PROCESS_DOCUMENT = "process_document"
         ASK = "ask"
 
@@ -412,6 +413,7 @@ class RouteOption(models.Model):
     shipment = models.ForeignKey(Shipment, on_delete=models.CASCADE, related_name="route_options")
     run = models.ForeignKey(AgentRun, null=True, blank=True, on_delete=models.PROTECT, related_name="route_options")
     kind = models.CharField(max_length=5, choices=Kind.choices, default=Kind.ROUTE)
+    key = models.CharField(max_length=12, blank=True, help_text='solver key within its run: "R1".."R5", "WAIT"')
     label = models.CharField(max_length=160)
     legs = models.JSONField(default=list, blank=True)
     geometry = models.JSONField(default=dict, blank=True)
@@ -427,6 +429,9 @@ class RouteOption(models.Model):
     score = models.JSONField(default=dict, blank=True, help_text="{criterion: value, ..., total}")
     possible_disruptions = models.JSONField(default=list, blank=True)
     contingency = models.ForeignKey["RouteOption | None"]("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    break_even_days = models.DecimalField(max_digits=6, decimal_places=1, null=True, blank=True,
+                                          help_text="WAIT: waiting wins if the corridor reopens within this many days")
+    infeasible_reason = models.TextField(blank=True, help_text="why the solver marks this option infeasible")
     rationale = models.TextField(blank=True)
     recommended = models.BooleanField(default=False)
     chosen = models.BooleanField(default=False)

@@ -116,7 +116,8 @@ def _route_airports(route) -> list[str]:
     """['DWC', 'LGG', 'ORD'] for a flight route whose legs are labelled 'Liège (LGG)'."""
     if route is None or not route.legs:
         return []
-    labels = [leg.get("from", "") for leg in route.legs] + [route.legs[-1].get("to", "")]
+    labels = ([leg.get("from_node") or leg.get("from", "") for leg in route.legs]
+              + [route.legs[-1].get("to_node") or route.legs[-1].get("to", "")])
     codes = [m.group(1) for m in (_CODE_IN_LABEL.search(x or "") for x in labels) if m]
     return codes if len(codes) == len(labels) else []
 

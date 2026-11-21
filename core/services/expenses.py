@@ -75,6 +75,7 @@ def apply_extraction(
     actor_user=None,
     extracted: dict | None = None,
     agent_summary: str | None = None,
+    run=None,
 ) -> ExpenseDocument:
     """Write extracted / matched fields onto a document (never `status`).
 
@@ -111,10 +112,41 @@ def apply_extraction(
         locked.save()
         audit.log(
             "document.fields_updated", actor_type=actor_type, actor_name=actor_name, actor_user=actor_user,
-            document=locked, before=before, after=audit.snapshot(locked),
+            run=run, document=locked, before=before, after=audit.snapshot(locked),
         )
     doc.refresh_from_db()
     return doc
+
+
+EXTRACTED_TO_FIELDS = ["doc_type", "number", "date", "net", "vat", "total", "currency", "iban", "quantity"]
+
+
+def record_extraction(
+    doc: ExpenseDocument,
+    extracted: dict,
+    *,
+    vendor: Vendor | None = None,
+    shipment: Shipment | None = None,
+    category: str = "",
+    summary: str = "",
+    actor_name: str,
+    run=None,
+) -> ExpenseDocument:
+    """What B's document pipeline stores after extraction + matching: the ExtractedExpense
+    (as a dict), the matched vendor / shipment / category and the explainer's summary."""
+    from datetime import date as _date
+
+    fields: dict = {k: extracted.get(k) for k in EXTRACTED_TO_FIELDS if extracted.get(k) not in (None, "")}
+    if isinstance(fields.get("date"), str):
+        fields["date"] = _date.fromisoformat(fields["date"][:10])
+    if vendor is not None:
+        fields["vendor"] = vendor
+    if shipment is not None:
+        fields["shipment"] = shipment
+    if category:
+        fields["category"] = category
+    return apply_extraction(doc, fields, actor_name=actor_name, actor_type="agent", extracted=extracted,
+                            agent_summary=summary, run=run)
 
 
 def apply_actual_cost(doc: ExpenseDocument) -> CostLine | None:

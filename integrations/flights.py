@@ -18,7 +18,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from core.geo import distance_to_path_km, feature_collection, great_circle, joined_path, locate_on_path, path_length_km
+from core.geo import distance_to_path_km, great_circle, joined_path, locate_on_path, path_length_km
 from core.models import AgentRun, Shipment
 from core.services import approvals, audit, shipments as shipment_svc
 from integrations import airports
@@ -145,8 +145,9 @@ def align_route(shipment: Shipment, codes: list[str], *, user, note: str = "") -
     for a, b in zip(chain, chain[1:]):
         p = great_circle([a["lat"], a["lon"]], [b["lat"], b["lon"]])
         km = path_length_km(p)
-        legs.append({"from": airports.label(a), "to": airports.label(b), "mode": "AIR", "km": round(km),
-                     "days": round(km / CRUISE_KMH / 24, 2), "corridors": []})
+        legs.append({"from_node": airports.label(a), "to_node": airports.label(b), "mode": "AIR", "km": round(km),
+                     "days": round(km / CRUISE_KMH / 24, 2), "corridors": [],
+                     "geometry": [[pt[1], pt[0]] for pt in p]})  # B's Leg: GeoJSON [lon, lat]
         paths.append(p)
     whole = joined_path(paths)
 
@@ -172,9 +173,10 @@ def align_route(shipment: Shipment, codes: list[str], *, user, note: str = "") -
             input={"airports": [airports.code_of(a) for a in chain], "tracker": shipment.tracker_id},
             model="airport codes (no LLM)", prompt_version="flight-route",
         )
+        days = max(round(hours / 24, 1), 0.1)
         [option] = shipment_svc.save_route_options(shipment, [RouteOptionDTO.model_validate(dict(
-            label=f"Flight route {label}", legs=legs, geometry=feature_collection(paths, legs),
-            transit_days=Decimal(str(max(round(hours / 24, 1), 0.1))),
+            key="F1", label=f"Flight route {label}", legs=legs, transit_days=days, days_p10=days, days_p90=days,
+            landed_cost=shipment.cargo_value, co2_kg=0.0, risk_score=0.0,
             rationale=f"Airports of the real flight {shipment.tracker_id} ({note or 'entered by the user'}).",
             recommended=True,
         ))], run=run, actor_name="web.flights")
