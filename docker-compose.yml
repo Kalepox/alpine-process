@@ -1,0 +1,52 @@
+x-app: &app
+  build: .
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    DATABASE_URL: postgres://monora:monora@db:5432/monora
+    DJANGO_SETTINGS_MODULE: monora.settings
+    PYTHONPATH: /app
+  volumes:
+    - .:/app
+  depends_on:
+    db:
+      condition: service_healthy
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: monora
+      POSTGRES_PASSWORD: monora
+      POSTGRES_DB: monora
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monora -d monora"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  web:
+    <<: *app
+    command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"
+    ports:
+      - "8000:8000"
+
+  # Live tracking collectors (aisstream / OpenSky / Routes) -> Position rows.
+  collectors:
+    <<: *app
+    command: python manage.py run_collectors
+    restart: on-failure
+
+  # Optional Google ADK dev UI:  docker compose --profile adk up adk
+  adk:
+    <<: *app
+    profiles: ["adk"]
+    command: adk web --host 0.0.0.0 --port 8001 autopilot/adk_app
+    ports:
+      - "8001:8001"
+
+volumes:
+  pgdata:
