@@ -21,7 +21,7 @@ from core.models import (
     Alert, AuditEvent, Corridor, CostLine, CustomsRate, ExpenseDocument, ExportBatch, Position, PreApproval,
     RouteOption, Shipment, ShipmentDocument, Vendor, WeeklyReport,
 )
-from core.services.shipments import LIVE_SOURCES
+from core.services.shipments import LIVE_SOURCES, current_position
 from integrations.live import live_feed
 
 DOC_KIND_LABELS: dict[str, str] = {str(k): str(v) for k, v in ShipmentDocument.Kind.choices}
@@ -91,7 +91,7 @@ def _main_corridor(s: Shipment, cmap: dict) -> str | None:
 
 
 def _position(s: Shipment):
-    p = s.positions.order_by("-ts").first()
+    p = current_position(s)
     if p is None:
         lat, lon = (s.origin_latlon or [0.0, 0.0])
         return dict(lat=lat, lon=lon, speed=None, heading=0, ts=None, source="planned")

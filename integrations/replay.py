@@ -19,7 +19,7 @@ from django.utils import timezone
 
 from core.geo import remaining_path, shipment_path, walk
 from core.models import Position, Shipment
-from core.services.shipments import speed_kmh
+from core.services.shipments import current_position, speed_kmh
 from integrations.base import CRUISE, PositionDTO, TrackingProvider
 
 MAX_STEP_SECONDS = 600  # cap per step, so a long collector downtime doesn't teleport ships
@@ -61,7 +61,7 @@ class _DeadReckoningProvider(TrackingProvider):
             path = shipment_path(shipment)
             if not path:
                 continue
-            latest = shipment.positions.order_by("-ts").first()
+            latest = current_position(shipment)
             if latest is None:
                 anchor, step_s = path[0], 0.0
             else:

@@ -41,6 +41,21 @@ def parse_states(payload: dict) -> list[PositionDTO]:
     return out
 
 
+def parse_flights(payload: dict) -> list[dict]:
+    """State vectors -> [{icao24, callsign, country, lat, lon, alt_m, speed_kn, track, on_ground, ts}]."""
+    out = []
+    for s in payload.get("states") or []:
+        if len(s) < 11 or s[5] is None or s[6] is None:
+            continue
+        out.append({
+            "icao24": str(s[0]).lower(), "callsign": (s[1] or "").strip(), "country": s[2],
+            "lat": float(s[6]), "lon": float(s[5]), "alt_m": s[13] if len(s) > 13 and s[13] is not None else s[7],
+            "speed_kn": round(s[9] * MS_TO_KNOTS) if s[9] is not None else None, "track": s[10],
+            "on_ground": bool(s[8]), "ts": datetime.fromtimestamp(s[3] or s[4] or time.time(), tz=dt_tz.utc),
+        })
+    return out
+
+
 class OpenSkyProvider(TrackingProvider):
     name = "opensky"
     mode = "AIR"
@@ -68,6 +83,20 @@ class OpenSkyProvider(TrackingProvider):
             self._token = data["access_token"]
             self._token_expires = time.time() + int(data.get("expires_in", 1800))
         return {"Authorization": f"Bearer {self._token}"}
+
+    def find_flights(self, *, callsign_prefix: str = "", bbox: tuple[float, float, float, float] | None = None,
+                     icao24: str = "") -> list[dict]:
+        """Live flights, optionally by callsign prefix ("UAE", "UAE9845"), bbox (lamin, lomin, lamax, lomax)
+        or exact ICAO24. Used to pick an aircraft to bind a shipment to (manage.py track_flight)."""
+        params: list[tuple[str, str]] = []
+        if icao24:
+            params.append(("icao24", icao24.lower()))
+        if bbox:
+            params += list(zip(("lamin", "lomin", "lamax", "lomax"), (str(v) for v in bbox)))
+        resp = self.session.get(API_URL, params=params, headers=self._auth_headers(), timeout=30)
+        resp.raise_for_status()
+        prefix = callsign_prefix.strip().upper()
+        return [f for f in parse_flights(resp.json()) if f["callsign"].upper().startswith(prefix)]
 
     def fetch(self, tracker_ids: list[str]) -> list[PositionDTO]:
         ids = [t.lower() for t in tracker_ids if t]

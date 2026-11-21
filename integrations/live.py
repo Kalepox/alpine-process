@@ -21,7 +21,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from core.models import Alert, AuditEvent, Position, Shipment
-from core.services.shipments import LIVE_SOURCES
+from core.services.shipments import LIVE_SOURCES, current_position
 
 MAX_POSITIONS = 2000
 MAX_EVENTS = 50
@@ -51,7 +51,7 @@ def live_feed(since: datetime | None = None) -> dict:
     ships = list(Shipment.objects.exclude(status=Shipment.Status.PLANNING).order_by("pk"))
     shipments_out = []
     for s in ships:
-        p = s.positions.order_by("-ts").first()
+        p = current_position(s)
         if p is None:
             continue
         live = p.source in LIVE_SOURCES

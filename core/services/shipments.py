@@ -29,6 +29,16 @@ def _actor_type_for(actor_name: str, default: str = "system") -> str:
     return "agent" if actor_name.startswith("agent") else default
 
 
+def current_position(shipment: Shipment) -> Position | None:
+    """What the UI should show: the latest real fix if it's less than an hour old
+    (an estimate never hides a fresh real position), otherwise the latest position."""
+    from django.conf import settings
+
+    cutoff = timezone.now() - timedelta(seconds=settings.INTERPOLATE_AFTER_SECONDS)
+    live = shipment.positions.filter(source__in=LIVE_SOURCES, ts__gte=cutoff).order_by("-ts").first()
+    return live or shipment.positions.order_by("-ts").first()
+
+
 def speed_kmh(speed: float | None, mode: str) -> float | None:
     """Position.speed (knots for SEA/AIR, km/h otherwise) -> km/h."""
     if speed is None:
@@ -73,6 +83,19 @@ def create_planning_shipment(request: dict, *, user) -> Shipment:
             "shipment.planning_created", actor_type="user", actor_name=user.get_username(), actor_user=user,
             shipment=shipment, input=request, after=audit.snapshot(shipment),
         )
+    return shipment
+
+
+def set_tracker(shipment: Shipment, tracker_id: str, *, actor_name: str, actor_user=None, note: str = "") -> Shipment:
+    """Bind a shipment to a real vessel / aircraft (MMSI, ICAO24 or plate). Audited."""
+    before = {"tracker_id": shipment.tracker_id}
+    shipment.tracker_id = tracker_id.strip().lower() if shipment.mode == "AIR" else tracker_id.strip()
+    shipment.save(update_fields=["tracker_id", "updated_at"])
+    audit.log(
+        "shipment.tracker_changed", actor_type="user" if actor_user else "system", actor_name=actor_name,
+        actor_user=actor_user, shipment=shipment, before=before, after={"tracker_id": shipment.tracker_id},
+        detail=note,
+    )
     return shipment
 
 

@@ -123,7 +123,10 @@ INTERPOLATE_AFTER_SECONDS = 3600
 PROMPT_VERSION = env_str("PROMPT_VERSION", "v1")  # stored in every AgentRun
 
 # Collectors (manage.py run_collectors)
-COLLECTOR_POLL_SECONDS = {"SEA": 30, "AIR": 60, "ROAD": 60, "RAIL": 60}  # OpenSky: keep AIR >= 60 (credits)
+# OpenSky meters API credits (anonymous ~400/day, an API client ~4000/day; ~4 per aircraft poll):
+# poll AIR every 60 s with credentials, every 5 min without. OPENSKY_POLL_SECONDS overrides.
+OPENSKY_POLL_SECONDS = int(env_str("OPENSKY_POLL_SECONDS", "60" if OPENSKY_CLIENT_ID else "300"))
+COLLECTOR_POLL_SECONDS = {"SEA": 30, "AIR": OPENSKY_POLL_SECONDS, "ROAD": 60, "RAIL": 60}
 WATCHDOG_SECONDS = 300
 TRACKS_FILE = BASE_DIR / "sample_data" / "tracks.json"
 
