@@ -67,6 +67,7 @@ class OpenSkyProvider(TrackingProvider):
         self.session = session or requests.Session()
         self._token = ""
         self._token_expires = 0.0
+        self._last_fetch = float("-inf")
 
     def _auth_headers(self) -> dict:
         if not (self.client_id and self.client_secret):
@@ -102,6 +103,12 @@ class OpenSkyProvider(TrackingProvider):
         ids = [t.lower() for t in tracker_ids if t]
         if not ids:
             return []
+        from django.conf import settings
+
+        # credits: call OpenSky at most every OPENSKY_POLL_SECONDS, however often the collector polls
+        if time.monotonic() - self._last_fetch < getattr(settings, "OPENSKY_POLL_SECONDS", 0):
+            return []
+        self._last_fetch = time.monotonic()
         resp = self.session.get(API_URL, params=[("icao24", i) for i in ids], headers=self._auth_headers(), timeout=20)
         if resp.status_code == 401:
             self._token = ""  # force a token refresh next time

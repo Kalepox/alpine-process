@@ -30,13 +30,18 @@ def _actor_type_for(actor_name: str, default: str = "system") -> str:
 
 
 def current_position(shipment: Shipment) -> Position | None:
-    """What the UI should show: the latest real fix if it's less than an hour old
-    (an estimate never hides a fresh real position), otherwise the latest position."""
+    """Where the shipment is, for the UI and for estimating forward.
+
+    With a real fix less than an hour old: the newest position *stored since* that fix
+    (the fix itself, or an estimate made from it), so an older estimate never hides a
+    real fix. Otherwise the latest position."""
     from django.conf import settings
 
     cutoff = timezone.now() - timedelta(seconds=settings.INTERPOLATE_AFTER_SECONDS)
     live = shipment.positions.filter(source__in=LIVE_SOURCES, ts__gte=cutoff).order_by("-ts").first()
-    return live or shipment.positions.order_by("-ts").first()
+    if live is not None:
+        return shipment.positions.filter(pk__gte=live.pk).order_by("-pk").first()
+    return shipment.positions.order_by("-ts").first()
 
 
 def speed_kmh(speed: float | None, mode: str) -> float | None:

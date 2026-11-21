@@ -99,7 +99,8 @@ def poll_once(mode: str) -> int:
 
     stored = _fetch(provider, {s.tracker_id: s for s in ships if s.tracker_id})
     if provider.healthy():
-        cutoff = timezone.now() - timedelta(seconds=settings.INTERPOLATE_AFTER_SECONDS)
+        after = settings.INTERPOLATE_AFTER_SECONDS_BY_MODE.get(mode, settings.INTERPOLATE_AFTER_SECONDS)
+        cutoff = timezone.now() - timedelta(seconds=after)
         stale = [s for s in ships if not s.tracker_id or _no_recent_fix(s, cutoff)]
     else:  # failed during this round
         stale = ships
