@@ -1,0 +1,58 @@
+{% load ui %}
+{% if error %}
+<div class="card pop-in flex gap-3 p-4 text-sm shadow-pop">{% icon "circle-x" "size-5 shrink-0 text-rose-500" %}<p>{{ error }}</p></div>
+{% else %}
+<div class="card pop-in overflow-hidden shadow-pop">
+  <div class="p-5">
+    <p class="text-xs muted">Best route to {{ p.destination }}</p>
+    <div class="mt-1 flex items-end justify-between gap-3">
+      <p class="text-2xl font-semibold tabular-nums">{{ p.total_days }} days</p>
+      <p class="text-sm tabular-nums muted">{{ p.total_km|num }} km · ETA {{ p.eta|date:"j M, H:i" }}</p>
+    </div>
+  </div>
+  <ol class="border-t border-ink-100 px-5 py-4 dark:border-white/5">
+    {% for l in p.legs %}
+    <li class="relative flex gap-3 pb-4 last:pb-0">
+      {% if not forloop.last %}<span class="absolute left-[13px] top-7 h-[calc(100%-1.5rem)] w-px {% if l.mode == 'SEA' %}bg-[#3ec7e0]/50{% elif l.mode == 'AIR' %}bg-[#a78bfa]/50{% else %}bg-[#f5c542]/50{% endif %}"></span>{% endif %}
+      <span class="grid size-7 shrink-0 place-items-center rounded-full {% if l.mode == 'SEA' %}bg-[#3ec7e0]/15 text-[#3ec7e0]{% elif l.mode == 'AIR' %}bg-[#a78bfa]/15 text-[#7c3aed] dark:text-[#a78bfa]{% else %}bg-[#f5c542]/15 text-[#c99a12] dark:text-[#f5c542]{% endif %}">{% if l.mode == 'SEA' %}{% icon "ship" "size-3.5" %}{% elif l.mode == 'AIR' %}{% icon "plane" "size-3.5" %}{% else %}{% icon "truck" "size-3.5" %}{% endif %}</span>
+      <div class="min-w-0 flex-1 text-sm">
+        <p class="font-medium">{{ l.label|default:l.mode }}</p>
+        <p class="text-xs tabular-nums muted">{{ l.km|num }} km · {% if l.days >= 1 %}{{ l.days }} days{% else %}{% widthratio l.hours 1 1 %} h{% endif %} · arrives {{ l.arrive|date:"j M, H:i" }}</p>
+        {% if l.mode == 'SEA' and p.handling_h and not forloop.last %}<p class="mt-1 text-xs muted">+ {{ p.handling_h }} h unloading and customs at {{ p.port }}</p>{% endif %}
+        {% if l.mode == 'AIR' and p.handling_h %}<p class="mt-1 text-xs muted">+ {{ p.handling_h }} h cargo handling and customs at each airport</p>{% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% with c=p.costs %}
+  <div class="border-t border-ink-100 px-5 py-4 dark:border-white/5">
+    <div class="flex items-baseline justify-between">
+      <p class="text-sm font-medium">Potential cost</p>
+      <p class="text-lg font-semibold tabular-nums">{{ c.total|eur }}</p>
+    </div>
+    <table class="mt-2 w-full text-xs">
+      <tbody class="tabular-nums">
+        {% for r in c.rows %}<tr><td class="py-0.5 muted">Freight · {{ r.label }}</td><td class="py-0.5 text-right">{{ r.freight|eur }}</td></tr>{% endfor %}
+        <tr><td class="py-0.5 muted">Terminal handling (load + unload)</td><td class="py-0.5 text-right">{{ c.breakdown.PORT|eur }}</td></tr>
+        <tr><td class="py-0.5 muted">Insurance ({{ c.insurance_pct }}% of {{ c.value_eur|eur }})</td><td class="py-0.5 text-right">{{ c.breakdown.INSURANCE|eur }}</td></tr>
+      </tbody>
+    </table>
+    <p class="mt-2 text-[11px] muted">Also: inventory carrying cost {{ c.carrying|eur }} (capital tied up in transit, not invoiced) · {{ c.co2_kg|num }} kg CO2 · {{ c.weight_t|floatformat:"-1" }} t · sample rates</p>
+  </div>
+  {% endwith %}
+  {% if p.alternatives %}
+  <div class="border-t border-ink-100 px-5 py-3 text-xs dark:border-white/5">
+    <p class="muted">Other ports checked</p>
+    <p class="mt-1 tabular-nums">{% for a in p.alternatives %}{{ a.port }} <span class="muted">{{ a.days }} d</span>{% if not forloop.last %} · {% endif %}{% endfor %}</p>
+  </div>
+  {% endif %}
+  <form method="post" action="{% url 'web:plan_save' %}" class="border-t border-ink-100 bg-ink-50/50 px-5 py-3.5 dark:border-white/5 dark:bg-white/[.015]">{% csrf_token %}
+    <input type="hidden" name="name" value="{{ form.name }}"><input type="hidden" name="cargo" value="{{ form.cargo }}">
+    <input type="hidden" name="lat" value="{{ form.lat }}"><input type="hidden" name="lon" value="{{ form.lon }}">
+    <input type="hidden" name="destination" value="{{ form.destination }}"><input type="hidden" name="mode" value="{{ p.mode }}"><input type="hidden" name="weight_t" value="{{ form.weight_t }}"><input type="hidden" name="value_eur" value="{{ form.value_eur }}">
+    <button class="btn btn-primary w-full">{% icon "plus" %} Add {{ form.name|default:"shipment" }} to the map</button>
+  </form>
+  <p class="px-5 pb-3 text-[11px] muted">Sea lanes: searoute · flights: great-circle between the nearest major airports (OurAirports) · roads: OpenStreetMap (OSRM) · speeds and handling times are sample assumptions.</p>
+</div>
+{{ geo|json_script:"plan-geo" }}
+{% endif %}

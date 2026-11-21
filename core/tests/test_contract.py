@@ -71,5 +71,8 @@ def test_contract_signatures_importable():
 
 @pytest.mark.django_db
 def test_home_and_login_pages(client):
-    assert client.get("/").status_code == 200
+    # C: the UI sends anonymous visitors to its login page
+    home = client.get("/")
+    assert home.status_code == 302 and "/login/" in home["Location"]
+    assert client.get("/login/").status_code == 200
     assert client.get("/admin/login/").status_code == 200

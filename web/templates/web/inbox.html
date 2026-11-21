@@ -1,0 +1,42 @@
+{% extends "web/base.html" %}{% load ui %}
+{% block title %}Inbox{% endblock %}
+{% block crumbs %}<p class="text-sm font-medium">Expense inbox</p>{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-[1400px] space-y-6">
+  <div class="flex flex-wrap items-end justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-semibold tracking-tight">Inbox</h1>
+      <p class="mt-1 text-sm muted">Freight bills, insurance, demurrage, customs. Each one is read, matched and checked before anyone pays it.</p>
+    </div>
+    <form method="post" action="{% url 'web:inbox_process_all' %}">{% csrf_token %}<button class="btn btn-outline">{% icon "play" %} Process all</button></form>
+  </div>
+
+  <form method="post" action="{% url 'web:inbox_upload' %}" enctype="multipart/form-data">{% csrf_token %}
+    <label data-dropzone class="group flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-ink-200 bg-white px-6 py-8 text-center transition hover:border-ink-300 data-[over]:border-brand-400 data-[over]:bg-brand-50/50 dark:border-white/10 dark:bg-night-850 dark:hover:border-white/20 dark:data-[over]:bg-brand-400/5">
+      <span class="grid size-10 place-items-center rounded-xl bg-ink-100 text-ink-600 transition group-hover:scale-105 dark:bg-white/5 dark:text-ink-300">{% icon "upload" "size-[18px]" %}</span>
+      <span class="text-sm"><span class="font-medium">Drop documents here</span> <span class="muted">or click to choose</span></span>
+      <span class="text-xs muted">PDF, JPG or PNG · several at once</span>
+      <input type="file" name="files" multiple accept=".pdf,.png,.jpg,.jpeg" class="sr-only">
+    </label>
+  </form>
+
+  <div class="card overflow-hidden">
+    <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+      <div class="seg overflow-x-auto">
+        <a href="{% url 'web:inbox' %}" class="{% if not status %}on{% endif %}">All <span class="ml-1 tabular-nums opacity-60">{{ total }}</span></a>
+        <a href="?status=NEEDS_REVIEW" class="{% if status == 'NEEDS_REVIEW' %}on{% endif %}">Needs review <span class="ml-1 tabular-nums opacity-60">{{ st_counts.NEEDS_REVIEW }}</span></a>
+        <a href="?status=READY" class="{% if status == 'READY' %}on{% endif %}">Ready <span class="ml-1 tabular-nums opacity-60">{{ st_counts.READY }}</span></a>
+        <a href="?status=APPROVED" class="{% if status == 'APPROVED' %}on{% endif %}">Approved <span class="ml-1 tabular-nums opacity-60">{{ st_counts.APPROVED }}</span></a>
+        <a href="?status=EXPORTED" class="{% if status == 'EXPORTED' %}on{% endif %}">Exported</a>
+        <a href="?status=REJECTED" class="{% if status == 'REJECTED' %}on{% endif %}">Rejected</a>
+      </div>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="tbl">
+        <thead><tr><th>Document</th><th>Vendor</th><th>Shipment</th><th>Checks</th><th class="!text-right">Amount</th><th>Status</th><th class="w-24">Received</th></tr></thead>
+        {% include "web/partials/inbox_rows.html" %}
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

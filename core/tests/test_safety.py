@@ -8,7 +8,11 @@ from pathlib import Path
 
 AUTOPILOT_DIR = Path(__file__).resolve().parents[2] / "autopilot"
 
-FORBIDDEN_NAMES = {"decide_preapproval", "decide_payment", "decide_report_send", "build_export_batch"}
+FORBIDDEN_NAMES = {
+    "approve_route", "decide_preapproval", "decide_payment", "decide_report_send", "build_export_batch",
+    # private helpers that skip the human gate
+    "_transition", "_write_batch", "_cancel_pending_payments", "_send_report",
+}
 FORBIDDEN_MODULES = {"core.services.export"}
 
 
@@ -29,6 +33,15 @@ def _violations(path: Path, root: Path) -> list[str]:
             found.append(f"line {node.lineno}: .{node.attr}")
         elif isinstance(node, ast.Name) and node.id in FORBIDDEN_NAMES:
             found.append(f"line {node.lineno}: {node.id}")
+        # state changes go through core.services: no `x.status = ...`, no `.update(status=...)`
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for t in targets:
+                if isinstance(t, ast.Attribute) and t.attr == "status":
+                    found.append(f"line {node.lineno}: assigns .status directly")
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "update":
+            if any(kw.arg == "status" for kw in node.keywords):
+                found.append(f"line {node.lineno}: .update(status=...)")
     rel = path.relative_to(root)
     return [f"{rel}: {v}" for v in found]
 
@@ -52,3 +65,15 @@ def test_scanner_catches_violations(tmp_path):
     )
     # line 4 is allowed: importing approvals is fine, calling decide_* is not
     assert len(_violations(bad, tmp_path)) == 4
+
+
+def test_scanner_catches_gate_bypasses(tmp_path):
+    bad = tmp_path / "sneaky.py"
+    bad.write_text(
+        "from core.services.approvals import _transition\n"
+        "doc.status = 'APPROVED'\n"
+        "ExpenseDocument.objects.filter(pk=1).update(status='EXPORTED')\n"
+        "ok = draft.severity\n",
+        encoding="utf-8",
+    )
+    assert len(_violations(bad, tmp_path)) == 3

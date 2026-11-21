@@ -1,0 +1,95 @@
+{% extends "web/base.html" %}{% load ui %}
+{% block title %}Plan route{% endblock %}
+{% block head %}{% include "web/partials/map_assets.html" %}{% endblock %}
+{% block crumbs %}<p class="text-sm font-medium">Plan route</p>{% endblock %}
+{% block content %}
+<div class="relative -mx-4 -my-6 h-[calc(100vh-4rem)] sm:-mx-6 lg:-mx-8 lg:-my-8">
+  <div id="map" class="absolute inset-0"></div>
+
+  <div class="pointer-events-none absolute inset-y-4 left-4 flex w-[360px] max-w-[calc(100%-2rem)] flex-col gap-3 overflow-y-auto">
+    <form id="plan-form" hx-post="{% url 'web:plan_compute' %}" hx-target="#plan-result" hx-swap="innerHTML" hx-indicator="#plan-busy"
+          class="card pointer-events-auto space-y-4 p-5 shadow-pop">
+      <div>
+        <p class="card-title">Plan a route</p>
+        <p class="mt-0.5 text-xs muted">Pick how it should travel, set where the cargo is and where it goes. Monora picks the port or airports and draws the legs.</p>
+      </div>
+      <div>
+        <span class="mb-1 block text-xs font-medium muted">Preferred mode</span>
+        <div class="grid grid-cols-3 gap-1.5" role="radiogroup">
+          {% for value, label in plan_modes %}
+          <label class="cursor-pointer">
+            <input type="radio" name="mode" value="{{ value }}" class="peer sr-only" {% if value == 'SEA' %}checked{% endif %}>
+            <span class="btn btn-outline btn-sm w-full peer-checked:border-brand-500 peer-checked:bg-brand-500/10 peer-checked:text-brand-700 dark:peer-checked:text-brand-300">
+              {% if value == 'SEA' %}{% icon "ship" "size-3.5" %}{% elif value == 'AIR' %}{% icon "plane" "size-3.5" %}{% else %}{% icon "truck" "size-3.5" %}{% endif %} {{ label }}
+            </span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <label class="col-span-2 block"><span class="mb-1 block text-xs font-medium muted">Shipment name</span><input name="name" class="input" placeholder="e.g. MV Nova / AWB 176-3301" value="MV Nova"></label>
+        <label class="col-span-2 block"><span class="mb-1 block text-xs font-medium muted">Cargo</span><input name="cargo" class="input" placeholder="e.g. Copper cathodes" value="Copper cathodes"></label>
+        <label class="block"><span class="mb-1 block text-xs font-medium muted">Weight (t)</span><input name="weight_t" class="input tabular-nums" inputmode="decimal" value="40"></label>
+        <label class="block"><span class="mb-1 block text-xs font-medium muted">Cargo value (EUR)</span><input name="value_eur" class="input tabular-nums" inputmode="decimal" value="356000"></label>
+      </div>
+      <div>
+        <div class="mb-1 flex items-center justify-between"><span class="text-xs font-medium muted">Start position</span><span class="text-[11px] muted">or click on the map</span></div>
+        <div class="grid grid-cols-2 gap-2">
+          <input name="lat" id="lat" class="input tabular-nums" placeholder="Latitude" value="34.0" inputmode="decimal" required>
+          <input name="lon" id="lon" class="input tabular-nums" placeholder="Longitude" value="25.0" inputmode="decimal" required>
+        </div>
+      </div>
+      <label class="block">
+        <span class="mb-1 block text-xs font-medium muted">Destination</span>
+        <input name="destination" class="input" placeholder="City (Ankara) or lat, lon" value="Ankara" required>
+      </label>
+      <button class="btn btn-primary w-full">
+        <span id="plan-busy" class="htmx-indicator">{% badge "PROCESSING" "" %}</span>
+        {% icon "route" %} Plan route
+      </button>
+    </form>
+    <div id="plan-result" class="pointer-events-auto empty:hidden"></div>
+  </div>
+
+  <div class="pointer-events-none absolute right-14 top-4 hidden flex-wrap gap-x-4 gap-y-1 rounded-xl bg-white/90 px-3 py-2 text-xs shadow-pop sm:flex dark:bg-night-850/90">
+    <span class="flex items-center gap-1.5"><span class="h-0.5 w-5 rounded-full bg-[#3ec7e0]"></span>Sea</span>
+    <span class="flex items-center gap-1.5"><span class="w-5 border-t-2 border-dashed border-[#f5c542]"></span>Truck</span>
+    <span class="flex items-center gap-1.5"><span class="w-5 border-t-2 border-dashed border-[#a78bfa]"></span>Air</span>
+  </div>
+</div>
+{{ map_data|json_script:"map-data" }}
+{% endblock %}
+{% block scripts %}
+<style>.htmx-indicator{display:none}.htmx-request .htmx-indicator,.htmx-request.htmx-indicator{display:inline-flex}</style>
+<script>
+  window.addEventListener('load', () => {
+    const data = JSON.parse(document.getElementById('map-data').textContent);
+    const m = MonoraMap.init(document.getElementById('map'), data, { traffic: true, corridors: 'none', padding: { top: 60, bottom: 60, left: 400, right: 60 }, planPadding: { top: 60, bottom: 60, left: 420, right: 80 } });
+    const lat = document.getElementById('lat'), lon = document.getElementById('lon');
+
+    // draggable "ship here" pin
+    const pinEl = document.createElement('div');
+    pinEl.className = 'monora-marker live';
+    pinEl.style.cssText = '--c:#3ec7e0';
+    pinEl.innerHTML = '<span class="pulse on"></span><span class="dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 21c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1s1.2 1 2.5 1c2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M19.38 20A11.6 11.6 0 0 0 21 14l-9-4-9 4c0 2.9.94 5.34 2.81 7.76"/><path d="M19 13V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6"/><path d="M12 10v4"/><path d="M12 2v3"/></svg></span>';
+    const pin = new maplibregl.Marker({ element: pinEl, draggable: true }).setLngLat([+lon.value, +lat.value]).addTo(m.map);
+    const setPos = (lngLat, submit) => {
+      lat.value = lngLat.lat.toFixed(4); lon.value = lngLat.lng.toFixed(4);
+      pin.setLngLat(lngLat);
+      if (submit) htmx.trigger('#plan-form', 'submit');
+    };
+    m.map.on('click', (e) => setPos(e.lngLat, document.getElementById('plan-result').children.length > 0));
+    pin.on('dragend', () => setPos(pin.getLngLat(), document.getElementById('plan-result').children.length > 0));
+    [lat, lon].forEach((i) => i.addEventListener('change', () => { if (!isNaN(+lat.value) && !isNaN(+lon.value)) pin.setLngLat([+lon.value, +lat.value]); }));
+    document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListener('change', () => htmx.trigger('#plan-form', 'submit')));
+
+    // draw the computed route
+    document.body.addEventListener('htmx:afterSwap', (e) => {
+      if (e.target.id !== 'plan-result') return;
+      const g = document.getElementById('plan-geo');
+      m.showPlan(g ? JSON.parse(g.textContent) : null);
+    });
+    m.map.once('load', () => htmx.trigger('#plan-form', 'submit'));   // show the example straight away
+  });
+</script>
+{% endblock %}

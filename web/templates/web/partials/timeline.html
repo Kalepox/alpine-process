@@ -1,0 +1,15 @@
+{% load ui %}
+<ol class="space-y-3.5">
+  {% for e in rows %}
+  <li class="flex gap-3">
+    <span class="grid size-7 shrink-0 place-items-center rounded-full bg-ink-100 text-[10px] font-semibold text-ink-700 dark:bg-white/10 dark:text-ink-200">{{ e.person.initials }}</span>
+    <div class="min-w-0 flex-1">
+      <p class="text-sm"><span class="font-medium">{{ e.person.name }}</span> <span class="{% if 'Rejected' in e.label %}text-rose-600 dark:text-rose-400{% elif 'Approved' in e.label %}text-emerald-700 dark:text-emerald-400{% else %}muted{% endif %}">{{ e.label|lower }}</span></p>
+      {% if e.detail %}<p class="mt-0.5 text-sm text-ink-600 dark:text-ink-300">{{ e.detail }}</p>{% endif %}
+    </div>
+    <time class="shrink-0 whitespace-nowrap pt-0.5 text-xs tabular-nums muted">{{ e.ts|date:"j M, H:i" }}</time>
+  </li>
+  {% empty %}
+  <li class="text-sm muted">No decisions yet.</li>
+  {% endfor %}
+</ol>

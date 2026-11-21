@@ -1,0 +1,39 @@
+{% with t=s.tracking %}
+<div class="card p-5">
+  <p class="card-title">Track a real flight</p>
+  <p class="mt-0.5 text-xs muted">
+    {% if s.live %}Following <span class="font-medium">{{ t.callsign|default:s.tracker_id }}</span> <span class="font-mono">({{ s.tracker_id }})</span> live from OpenSky, updated every few minutes.
+    {% elif s.tracker_id %}Bound to <span class="font-mono">{{ s.tracker_id }}</span>, no fresh position yet: showing the estimate along the route.
+    {% else %}Not bound to an aircraft: the position is estimated along the route.{% endif %}
+    Cargo and costs stay sample data.
+  </p>
+
+  {% if s.tracker_id %}
+  <form method="post" action="{% url 'web:shipment_flight_route' s.id %}" class="mt-4 rounded-xl border border-ink-100 p-4 dark:border-white/5">{% csrf_token %}
+    <p class="text-sm font-medium">Flight route: start, stopovers, end</p>
+    {% if t.suggested_route %}
+      <p class="mt-1 text-xs {% if t.suggestion_on_route %}text-emerald-700 dark:text-emerald-400{% else %}text-amber-700 dark:text-amber-400{% endif %}">
+        {% if t.suggestion_on_route %}Suggested by adsbdb.com and it fits the plane's position: {{ t.suggested_route|join:" → " }}.
+        {% else %}adsbdb.com lists {{ t.suggested_route|join:" → " }}, but the plane is {{ t.suggestion_distance_km }} km away from that route, so it's probably outdated.{% endif %}
+      </p>
+    {% elif t.callsign %}
+      <p class="mt-1 text-xs muted">No route on file for {{ t.callsign }}. Type its airports (IATA or ICAO).</p>
+    {% endif %}
+    <div class="mt-3 flex flex-wrap gap-2">
+      <input name="airports" class="input max-w-[16rem] font-mono" autocomplete="off" placeholder="DWC LGG ORD"
+             value="{% if s.route_codes %}{{ s.route_codes|join:' ' }}{% elif t.suggestion_on_route %}{{ t.suggested_route|join:' ' }}{% endif %}">
+      {% if me.is_manager %}<button class="btn btn-primary">Use this route</button>
+      {% else %}<span class="self-center text-xs muted">A manager approves route changes.</span>{% endif %}
+    </div>
+    {% if s.route_codes %}<p class="mt-2 text-xs muted">Current route: {{ s.route_codes|join:" → " }}</p>{% endif %}
+  </form>
+  {% endif %}
+
+  <form class="mt-4 flex gap-2" hx-post="{% url 'web:shipment_flights' s.id %}" hx-target="#flight-results" hx-indicator="#flight-spin">
+    <input name="callsign" value="UAE9" class="input max-w-[12rem]" placeholder="Callsign prefix, e.g. UAE9" autocomplete="off">
+    <button class="btn {% if s.tracker_id %}btn-outline{% else %}btn-primary{% endif %}">{% if s.tracker_id %}Switch flight{% else %}Find flights{% endif %}</button>
+    <span id="flight-spin" class="htmx-indicator self-center text-xs muted">Asking OpenSky…</span>
+  </form>
+  <div id="flight-results" class="mt-4"></div>
+</div>
+{% endwith %}

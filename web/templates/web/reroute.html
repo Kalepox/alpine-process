@@ -1,0 +1,121 @@
+{% extends "web/base.html" %}{% load ui %}
+{% block title %}Alternatives · {{ s.ref }}{% endblock %}
+{% block head %}{% include "web/partials/map_assets.html" %}{% endblock %}
+{% block crumbs %}
+<nav class="flex items-center gap-1.5 text-sm"><a href="{% url 'web:overview' %}" class="muted hover:text-ink-900 dark:hover:text-white">Overview</a>{% icon "chevron-right" "size-3.5 text-ink-300" %}<span class="font-medium">{{ s.ref }}</span></nav>
+{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-[1400px] space-y-6">
+  <div class="flex flex-wrap items-end justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-semibold tracking-tight">{{ s.ref }}</h1>
+      <p class="mt-1 text-sm muted">{{ s.cargo }} · {{ s.quantity|num }} {{ s.unit }} · {{ s.origin }} → {{ s.destination }} · deadline {{ s.deadline|date:"j M" }} · demurrage {{ s.demurrage_per_day|eur }}/day</p>
+    </div>
+    <div class="flex items-center gap-2 text-sm">
+      <span class="muted">Current corridor</span><span class="font-medium">{{ s.corridor_obj.name }}</span>{% badge s.corridor_obj.status %}
+    </div>
+  </div>
+
+  {% for a in s.alerts %}
+  <div class="flex items-start gap-3 rounded-2xl border p-4 {% if a.severity == 'block' %}border-rose-200 bg-rose-50 dark:border-rose-400/20 dark:bg-rose-500/[.07]{% else %}border-amber-200 bg-amber-50 dark:border-amber-400/20 dark:bg-amber-500/[.07]{% endif %}">
+    <span class="grid size-8 shrink-0 place-items-center rounded-lg {% if a.severity == 'block' %}bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300{% else %}bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300{% endif %}">{% icon "triangle-alert" %}</span>
+    <div><p class="text-sm font-medium">What changed</p><p class="mt-0.5 text-sm text-ink-700 dark:text-ink-300">{{ a.message }}</p></div>
+  </div>
+  {% endfor %}
+  {% if chosen %}
+  <div class="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm dark:border-emerald-400/20 dark:bg-emerald-500/[.07]">
+    {% icon "circle-check" "size-5 text-emerald-600" %}
+    <p>Decided: <strong>{{ chosen.label }}</strong>. Budget of {{ chosen.total_extra_cost|eur }} committed, ETA moved to {{ chosen.arrival|date:"j M" }}.</p>
+  </div>
+  {% endif %}
+
+  {% if not options %}
+  <div class="card grid place-items-center p-12 text-center">
+    <div>
+      {% if s.alerts %}
+      <p class="font-medium">No alternatives computed yet</p>
+      <p class="mt-1 text-sm muted">The autopilot prices alternatives from the cost models. It never picks one.</p>
+      <form method="post" action="{% url 'web:reroute_propose' s.id %}" class="mt-5">{% csrf_token %}<button class="btn btn-primary">{% icon "route" %} Find alternatives</button></form>
+      {% else %}
+      <span class="mx-auto grid size-11 place-items-center rounded-2xl bg-emerald-100 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-300">{% icon "check" "size-5" %}</span>
+      <p class="mt-4 font-medium">No problem on this route</p>
+      <p class="mt-1 text-sm muted">Alternatives are only computed when something goes wrong on the corridor or at the port.</p>
+      <a href="{% url 'web:shipment' s.id %}" class="btn btn-outline mt-5">Back to shipment</a>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+
+  <!-- Map + comparison -->
+  <div class="grid grid-cols-1 gap-6 xl:grid-cols-5">
+    <div class="card overflow-hidden xl:col-span-3">
+      <div id="reroute-map" class="h-[420px] xl:h-full"></div>
+    </div>
+    <div class="card overflow-hidden xl:col-span-2">
+      <div class="card-head"><p class="card-title">Cost comparison</p><span class="text-xs muted">Extra vs current plan</span></div>
+      <div class="overflow-x-auto">
+        <table class="tbl">
+          <thead><tr><th></th>{% for o in options %}<th class="!text-right"><span class="ml-auto block h-1 w-5 rounded-full" style="background: {{ o.color }}"></span><span class="mt-1.5 block normal-case tracking-normal text-ink-600 dark:text-ink-300">Option {{ forloop.counter }}</span></th>{% endfor %}</tr></thead>
+          <tbody>
+            {% for row in compare %}
+            <tr><td class="whitespace-nowrap text-ink-600 dark:text-ink-300">{{ row.label }}</td>{% for v in row.values %}<td class="money {% if not v %}text-ink-300 dark:text-ink-600{% elif v < 0 %}text-emerald-600 dark:text-emerald-400{% endif %}">{% if v is None %}–{% else %}{{ v|eur_signed }}{% endif %}</td>{% endfor %}</tr>
+            {% endfor %}
+            <tr class="bg-ink-50/70 dark:bg-white/[.02]"><td class="font-semibold">Total extra</td>{% for o in options %}<td class="money font-semibold">{{ o.total_extra_cost|eur_signed }}</td>{% endfor %}</tr>
+            <tr><td class="text-ink-600 dark:text-ink-300">Delay</td>{% for o in options %}<td class="money">{% if o.delay_days %}+{{ o.delay_days }}d{% else %}–{% endif %}</td>{% endfor %}</tr>
+            <tr><td class="text-ink-600 dark:text-ink-300">Arrival</td>{% for o in options %}<td class="money">{{ o.arrival|date:"j M" }}</td>{% endfor %}</tr>
+            <tr><td class="text-ink-600 dark:text-ink-300">Vs deadline</td>{% for o in options %}<td class="money {% if o.margin_days < 0 %}font-medium text-rose-600{% else %}text-emerald-700 dark:text-emerald-400{% endif %}">{% if o.margin_days < 0 %}{{ o.margin_days|stringformat:"d"|cut:"-" }}d late{% else %}{{ o.margin_days }}d early{% endif %}</td>{% endfor %}</tr>
+            <tr><td class="text-ink-600 dark:text-ink-300">Risk</td>{% for o in options %}<td class="money">{% if o.risk == 'high' %}<span class="font-medium text-rose-600 dark:text-rose-400">High</span>{% elif o.risk == 'medium' %}<span class="font-medium text-amber-600 dark:text-amber-400">Medium</span>{% else %}Low{% endif %}</td>{% endfor %}</tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Option cards -->
+  <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+    {% for o in options %}
+    <article class="card flex flex-col overflow-hidden transition {% if o.chosen %}ring-2 ring-emerald-500{% elif chosen %}opacity-60{% endif %}" data-option="{{ o.id }}">
+      <div class="flex-1 p-5">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <p class="flex items-center gap-2 text-xs muted"><span class="h-1 w-5 rounded-full" style="background: {{ o.color }}"></span>Option {{ forloop.counter }}</p>
+            <h2 class="mt-1.5 font-semibold leading-snug">{{ o.label }}</h2>
+          </div>
+          {% if o.chosen %}<span class="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 dark:text-emerald-400">{% icon "check" "size-3.5" %}Approved</span>
+          {% elif o.recommended %}<span class="inline-flex items-center gap-1 text-xs font-medium text-brand-600 dark:text-brand-300">{% icon "star" "size-3" %}Recommended</span>{% endif %}
+        </div>
+        <div class="mt-4 grid grid-cols-2 gap-2">
+          <div class="rounded-xl bg-ink-50 p-3 dark:bg-white/[.03]"><p class="text-xs muted">Extra cost</p><p class="mt-1 text-lg font-semibold tabular-nums {% if o.total_extra_cost < 0 %}text-emerald-600 dark:text-emerald-400{% endif %}">{{ o.total_extra_cost|eur_signed }}</p></div>
+          <div class="rounded-xl bg-ink-50 p-3 dark:bg-white/[.03]"><p class="text-xs muted">Arrival</p><p class="mt-1 text-lg font-semibold">{{ o.arrival|date:"j M" }} <span class="text-xs font-normal muted">{% if o.delay_days %}+{{ o.delay_days }}d{% endif %}</span></p></div>
+        </div>
+        <div class="autopilot mt-4 p-3.5">
+          <p class="autopilot-label">{% icon "cpu" "size-3" %} Autopilot</p>
+          <p class="mt-1.5 text-sm leading-relaxed text-ink-700 dark:text-ink-200">{{ o.rationale }}</p>
+        </div>
+      </div>
+      {% if not chosen %}
+      <div class="border-t border-ink-100 bg-ink-50/50 px-5 py-3.5 dark:border-white/5 dark:bg-white/[.015]">
+        <a href="{% url 'web:route_review' o.id %}" class="btn {% if o.role == 'best' %}btn-primary{% else %}btn-outline{% endif %} w-full">Review &amp; approve {% icon "arrow-right" "size-4" %}</a>
+      </div>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+  <p class="text-xs muted">Costs come from deterministic cost models (sample rate tables). The agent ranks and explains; it cannot choose or commit money.</p>
+  {% endif %}
+</div>
+{{ map_data|json_script:"map-data" }}
+{% endblock %}
+{% block scripts %}
+<script>
+  window.addEventListener('load', () => {
+    const el = document.getElementById('reroute-map'); if (!el) return;
+    const data = JSON.parse(document.getElementById('map-data').textContent);
+    const m = MonoraMap.init(el, data, { selected: {{ s.id }}, padding: 50 });
+    document.querySelectorAll('[data-option]').forEach((c) => {
+      c.addEventListener('mouseenter', () => m.highlight(+c.dataset.option));
+      c.addEventListener('mouseleave', () => m.highlight(null));
+    });
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,5 @@
+# Local development (editor / type checking). Docker uses requirements.txt only.
+-r requirements.txt
+django-types>=0.20   # type stubs Pylance understands (RelatedManager, field types)
+pyright>=1.1.380     # same checker as VS Code's Pylance, runnable from the terminal
+lxml-stubs>=0.5     # types for lxml (used in tests)

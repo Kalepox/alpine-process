@@ -1,0 +1,74 @@
+{% extends "web/base.html" %}{% load ui %}
+{% block title %}Map{% endblock %}
+{% block head %}{% include "web/partials/map_assets.html" %}{% endblock %}
+{% block crumbs %}<p class="text-sm font-medium">Map</p>{% endblock %}
+{% block content %}
+<div class="relative -mx-4 -my-6 h-[calc(100vh-4rem)] sm:-mx-6 lg:-mx-8 lg:-my-8">
+  <div id="map" class="absolute inset-0"></div>
+
+  <!-- shipment list -->
+  <div class="pointer-events-none absolute inset-y-4 left-4 flex w-72 flex-col gap-3 max-sm:hidden">
+    <div class="card pointer-events-auto flex max-h-full flex-col overflow-hidden shadow-pop">
+      <div class="flex items-center justify-between px-4 pb-2 pt-3.5">
+        <p class="card-title">{{ shipments|length }} shipments</p>
+        <div class="seg !p-0.5" id="mode-filter">
+          <button class="on !px-2 !py-1" data-mode="">All</button>
+          <button class="!px-2 !py-1" data-mode="SEA" title="Sea">{% icon "ship" "size-3.5" %}</button>
+          <button class="!px-2 !py-1" data-mode="AIR" title="Air">{% icon "plane" "size-3.5" %}</button>
+          <button class="!px-2 !py-1" data-mode="ROAD" title="Road">{% icon "truck" "size-3.5" %}</button>
+        </div>
+      </div>
+      <ul class="flex-1 overflow-y-auto px-2 pb-2">
+        {% for s in shipments %}
+        <li data-ship="{{ s.id }}" data-mode="{{ s.mode }}">
+          <button type="button" class="ship-item w-full rounded-xl px-2.5 py-2.5 text-left transition hover:bg-ink-50 dark:hover:bg-white/[.04]" data-select="{{ s.id }}">
+            <div class="flex items-center justify-between gap-2">
+              <span class="flex min-w-0 items-center gap-2">
+                <span class="size-2 shrink-0 rounded-full" style="background: {% if s.status == 'ON_TRACK' %}#10b981{% elif s.status == 'ATTENTION' %}#f59e0b{% elif s.status == 'PROBLEM' %}#e11d48{% else %}#8a8a82{% endif %}"></span>
+                <span class="truncate text-sm font-medium">{{ s.ref }}</span>
+              </span>
+              <span class="text-ink-400">{% if s.mode == 'SEA' %}{% icon "ship" "size-3.5" %}{% elif s.mode == 'AIR' %}{% icon "plane" "size-3.5" %}{% else %}{% icon "truck" "size-3.5" %}{% endif %}</span>
+            </div>
+            <p class="mt-0.5 truncate pl-4 text-xs muted">{{ s.origin }} → {{ s.destination }}</p>
+          </button>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    <div class="card pointer-events-auto p-3 text-xs shadow-pop">
+      <p class="eyebrow mb-2">Corridors</p>
+      <div class="flex flex-wrap gap-x-4 gap-y-1.5 muted">
+        <span class="flex items-center gap-1.5"><span class="w-5 border-t-2 border-dashed border-ink-400"></span>Open</span>
+        <span class="flex items-center gap-1.5"><span class="w-5 border-t-2 border-dotted border-amber-500"></span>Restricted</span>
+        <span class="flex items-center gap-1.5"><span class="w-5 border-t-2 border-dotted border-rose-600"></span>Closed</span>
+        <span class="flex items-center gap-1.5"><span class="size-2 rounded-full bg-[#4566f2] opacity-70"></span>Other vessels (live AIS)</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- side panel -->
+  <aside id="panel" class="absolute inset-x-4 bottom-4 max-h-[60%] overflow-y-auto sm:inset-x-auto sm:bottom-auto sm:right-14 sm:top-4 sm:max-h-[calc(100%-2rem)] sm:w-[380px] empty:hidden"></aside>
+</div>
+{{ map_data|json_script:"map-data" }}
+{% endblock %}
+{% block scripts %}
+<script>
+  window.addEventListener('load', () => {
+    const data = JSON.parse(document.getElementById('map-data').textContent);
+    const panel = document.getElementById('panel');
+    const open = (id) => {
+      htmx.ajax('GET', `/map/panel/${id}/`, { target: panel, swap: 'innerHTML' });
+      document.querySelectorAll('.ship-item').forEach((b) => b.classList.toggle('bg-ink-100', +b.dataset.select === id));
+      document.querySelectorAll('.ship-item').forEach((b) => b.classList.toggle('dark:bg-white/[.06]', +b.dataset.select === id));
+    };
+    const m = MonoraMap.init(document.getElementById('map'), data, { corridors: 'all', traffic: true, padding: { top: 60, bottom: 60, left: 340, right: 60 }, onSelect: (s) => open(s.id) });
+    document.querySelectorAll('[data-select]').forEach((b) => b.addEventListener('click', () => { const id = +b.dataset.select; m.select(id); m.flyTo(id); open(id); }));
+    document.body.addEventListener('click', (e) => { if (e.target.closest('[data-close-panel]')) { panel.innerHTML = ''; m.select(null); } });
+    document.querySelectorAll('#mode-filter button').forEach((b) => b.addEventListener('click', () => {
+      document.querySelectorAll('#mode-filter button').forEach((x) => x.classList.toggle('on', x === b));
+      document.querySelectorAll('[data-ship]').forEach((li) => li.classList.toggle('hidden', !!b.dataset.mode && li.dataset.mode !== b.dataset.mode));
+    }));
+    const pre = new URLSearchParams(location.search).get('s'); if (pre) { m.select(+pre); open(+pre); }
+  });
+</script>
+{% endblock %}

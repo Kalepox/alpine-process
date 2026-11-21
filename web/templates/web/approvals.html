@@ -1,0 +1,100 @@
+{% extends "web/base.html" %}{% load ui %}
+{% block title %}Approvals{% endblock %}
+{% block crumbs %}<p class="text-sm font-medium">Approvals</p>{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-[1200px] space-y-6">
+  <div class="flex flex-wrap items-end justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-semibold tracking-tight">Approvals</h1>
+      <p class="mt-1 text-sm muted">Everything the autopilot asked a person to decide. Nothing here happens without a click.</p>
+    </div>
+    {% if not me.is_manager %}<span class="chip">{% icon "lock" "size-3" %} View only · approving needs a manager</span>{% endif %}
+  </div>
+
+  <div class="flex gap-6 border-b border-ink-200 dark:border-white/[.07]">
+    <a href="?tab=payments" class="tab {% if tab == 'payments' %}active{% endif %}">Payments <span class="ml-1 tabular-nums muted">{{ payments|length }}</span></a>
+    <a href="?tab=preapprovals" class="tab {% if tab == 'preapprovals' %}active{% endif %}">Pre-approvals <span class="ml-1 tabular-nums muted">{{ counts.preapprovals }}</span></a>
+    <a href="?tab=reports" class="tab {% if tab == 'reports' %}active{% endif %}">Reports <span class="ml-1 tabular-nums muted">{{ reports|length }}</span></a>
+  </div>
+
+  {% if tab == 'payments' %}
+  <form method="post" action="{% url 'web:payments_decide' %}" data-batch data-confirm-title="Approve selected payments?" data-confirm="" data-confirm-ok="Approve" class="card overflow-hidden">{% csrf_token %}
+    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+    {% if payments %}
+    <div class="overflow-x-auto">
+      <table class="tbl">
+        <thead><tr>
+          <th class="w-10">{% if me.is_manager %}<input type="checkbox" data-check-all class="size-4 rounded border-ink-300 accent-ink-900">{% endif %}</th>
+          <th>Document</th><th>Vendor</th><th>Pay to</th><th>Shipment</th><th class="!text-right">Amount</th>
+        </tr></thead>
+        <tbody>
+          {% for d in payments %}
+          <tr>
+            <td>{% if me.is_manager %}<input type="checkbox" name="doc" value="{{ d.id }}" data-check data-amount="{{ d.total }}" class="size-4 rounded border-ink-300 accent-ink-900">{% endif %}</td>
+            <td><a href="{% url 'web:document' d.id %}" class="font-medium hover:underline">{{ d.number }}</a><span class="block text-xs muted">{{ d.type_label }}</span></td>
+            <td class="max-w-[220px] truncate">{{ d.vendor.name }}</td>
+            <td class="font-mono text-[13px] muted">{{ d.iban|iban_mask }}</td>
+            <td>{{ d.shipment.ref|default:"–" }}</td>
+            <td class="money font-medium">{{ d.total|eur:2 }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if me.is_manager %}
+    <div class="flex flex-wrap items-center justify-between gap-3 border-t border-ink-100 bg-ink-50/60 px-4 py-3 dark:border-white/5 dark:bg-white/[.015]">
+      <p class="text-sm"><span data-sel-count class="font-semibold tabular-nums">0</span> selected · <span data-sel-total class="font-semibold tabular-nums">€0</span></p>
+      <div class="flex gap-2">
+        <button name="decision" value="reject" data-needs-sel class="btn btn-outline btn-sm">Reject</button>
+        <button name="decision" value="approve" data-needs-sel class="btn btn-primary btn-sm">Approve selected</button>
+      </div>
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="p-14 text-center"><p class="font-medium">No payments waiting</p><p class="mt-1 text-sm muted">Clean documents show up here automatically.</p></div>
+    {% endif %}
+  </form>
+  <p class="text-xs muted">IBANs are masked here. The full IBAN is only shown on the document review screen. Each payment is re-checked against the document when you approve.</p>
+
+  {% elif tab == 'preapprovals' %}
+  <div class="space-y-3">
+    {% for p in preapprovals %}
+    <article class="card p-5">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div class="min-w-0">
+          <div class="flex items-center gap-2"><span class="font-mono text-xs muted">{{ p.ref }}</span>{% badge p.status %}</div>
+          <p class="mt-2 font-medium">{{ p.shipment.ref }} · up to {{ p.amount_cap|eur }}</p>
+          <p class="mt-1 text-sm text-ink-600 dark:text-ink-300">{{ p.reason }}</p>
+          <div class="mt-3 flex flex-wrap gap-1.5">{% for c in p.category_labels %}<span class="chip">{{ c }}</span>{% endfor %}</div>
+          <p class="mt-3 text-xs muted">Requested by {{ p.requested_by }}{% if p.decided_by %} · decided by {{ p.decided_by }} {{ p.decided_at|ago }}{% endif %}</p>
+        </div>
+        {% if p.status == 'PENDING' and me.is_manager %}
+        <form method="post" action="{% url 'web:preapproval_decide' p.id %}" class="flex gap-2" data-confirm-title="Approve {{ p.ref }}?" data-confirm="This commits up to {{ p.amount_cap|eur }} for {{ p.shipment.ref }}." data-confirm-ok="Approve">{% csrf_token %}
+          <button name="decision" value="reject" class="btn btn-outline btn-sm">Reject</button>
+          <button name="decision" value="approve" class="btn btn-primary btn-sm">Approve</button>
+        </form>
+        {% endif %}
+      </div>
+    </article>
+    {% empty %}
+    <div class="card p-14 text-center text-sm muted">No pre-approvals.</div>
+    {% endfor %}
+  </div>
+
+  {% else %}
+  <div class="space-y-3">
+    {% for r in reports %}
+    <a href="{% url 'web:report' r.id %}" class="card flex items-center justify-between gap-4 p-5 transition hover:border-ink-300 dark:hover:border-white/15">
+      <div class="flex items-center gap-3">
+        <span class="grid size-10 place-items-center rounded-xl bg-ink-100 text-ink-600 dark:bg-white/5 dark:text-ink-300">{% icon "file-text" %}</span>
+        <div><p class="font-medium">Weekly logistics report</p><p class="text-sm muted">{{ r.period_start|date:"j M" }} – {{ r.period_end|date:"j M Y" }}</p></div>
+      </div>
+      <span class="flex items-center gap-3">{% badge r.status %}{% icon "chevron-right" "size-4 text-ink-400" %}</span>
+    </a>
+    {% empty %}
+    <div class="card p-14 text-center text-sm muted">No reports waiting to be sent.</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

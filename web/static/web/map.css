@@ -1,0 +1,27 @@
+.monora-marker { display: grid; place-items: center; width: 30px; height: 30px; background: none; border: 0; padding: 0; cursor: pointer; }
+.monora-marker .dot { position: relative; z-index: 2; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 999px; background: #fff; color: var(--c); box-shadow: 0 0 0 2px var(--c), 0 4px 12px -2px rgba(0,0,0,.25); transition: transform .15s; }
+.monora-marker .dot svg { width: 15px; height: 15px; }
+.monora-marker:hover .dot, .monora-marker.sel .dot { transform: scale(1.15); }
+.monora-marker.sel .dot { background: var(--c); color: #fff; }
+.monora-marker .pulse { position: absolute; inset: 0; border-radius: 999px; }
+.monora-marker .pulse.on { background: var(--c); opacity: .35; animation: mpulse 1.8s ease-out infinite; }
+.monora-marker .lbl { position: absolute; left: 34px; top: 50%; transform: translateY(-50%); white-space: nowrap; font: 500 11.5px/1 Geist, system-ui, sans-serif; color: #131a2a; background: rgba(255,255,255,.92); padding: 4px 7px; border-radius: 7px; box-shadow: 0 1px 3px rgba(0,0,0,.12); pointer-events: none; opacity: 0; transition: opacity .15s; }
+.monora-marker:hover .lbl, .monora-marker.sel .lbl, .show-labels .monora-marker .lbl { opacity: 1; }
+.dark .monora-marker .dot { background: #0e1524; }
+.dark .monora-marker.sel .dot { background: var(--c); color: #090e1a; }
+.dark .monora-marker .lbl { background: rgba(14,21,36,.94); color: #eceef3; }
+@keyframes mpulse { 0% { transform: scale(1); opacity: .45 } 100% { transform: scale(2.4); opacity: 0 } }
+.maplibregl-ctrl-group { border-radius: 12px !important; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.1) !important; }
+.dark .maplibregl-ctrl-group { background: #0e1524; }
+.dark .maplibregl-ctrl-group button + button { border-top-color: #222e47; }
+.dark .maplibregl-ctrl-icon { filter: invert(1); }
+.maplibregl-ctrl-attrib { font-size: 10px; border-radius: 8px 0 0 0; }
+.dark .maplibregl-ctrl-attrib { background: rgba(9,14,26,.7); color: #8f98aa; }
+.dark .maplibregl-ctrl-attrib a { color: #aaa; }
+.monora-marker.live .dot::after { content: ""; position: absolute; right: -2px; top: -2px; width: 9px; height: 9px; border-radius: 999px; background: #10b981; box-shadow: 0 0 0 2px #fff; }
+.dark .monora-marker.live .dot::after { box-shadow: 0 0 0 2px #0e1524; }
+.ais-pop .maplibregl-popup-content { padding: 7px 10px; border-radius: 10px; font: 12px/1.35 Geist, system-ui, sans-serif; color: #131a2a; box-shadow: 0 6px 20px -6px rgba(0,0,0,.3); }
+.ais-pop .maplibregl-popup-content span { color: #687187; }
+.dark .ais-pop .maplibregl-popup-content { background: #0e1524; color: #eceef3; }
+.dark .ais-pop .maplibregl-popup-tip { border-top-color: #0e1524; }
+.ais-pop .maplibregl-popup-tip { display: none; }

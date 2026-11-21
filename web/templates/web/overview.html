@@ -1,0 +1,98 @@
+{% extends "web/base.html" %}{% load ui %}
+{% block title %}Overview{% endblock %}
+{% block head %}{% include "web/partials/map_assets.html" %}{% endblock %}
+{% block crumbs %}<p class="text-sm font-medium">Overview</p>{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-[1400px] space-y-6">
+
+  <div>
+    <p class="text-sm muted">{% now "l, j F" %}</p>
+    <h1 class="mt-1 text-2xl font-semibold tracking-tight">Hello, {{ me.name.split.0 }}</h1>
+    <p class="mt-1 text-sm muted">{{ in_transit }} shipments on the move · {{ on_track }} on track{% if problems %} · <span class="font-medium text-rose-600 dark:text-rose-400">{{ problems|length }} need{{ problems|length|pluralize:"s," }} a decision</span>{% endif %}</p>
+  </div>
+
+  <!-- Problem -->
+  {% for p in problems %}
+  <section class="overflow-hidden rounded-2xl border border-rose-200 bg-white shadow-soft dark:border-rose-400/25 dark:bg-night-850">
+    <div class="flex flex-wrap items-start gap-4 bg-rose-50 p-5 dark:bg-rose-500/[.07]">
+      <span class="grid size-10 shrink-0 place-items-center rounded-xl bg-rose-600 text-white">{% icon "triangle-alert" "size-5" %}</span>
+      <div class="min-w-0 flex-1">
+        <p class="text-xs font-medium uppercase tracking-[.08em] text-rose-700 dark:text-rose-300">Problem on route</p>
+        <h2 class="mt-1 text-lg font-semibold">{{ p.s.ref }} <span class="font-normal muted">· {{ p.s.origin }} → {{ p.s.destination }}</span></h2>
+        <p class="mt-1 text-sm text-ink-700 dark:text-ink-300">{{ p.alert.message }}</p>
+      </div>
+      <a href="{% url 'web:reroute' p.s.id %}" class="btn btn-primary">Compare alternatives {% icon "arrow-right" "size-4" %}</a>
+    </div>
+    {% if p.options %}
+    <div class="grid grid-cols-1 divide-y divide-ink-100 md:grid-cols-3 md:divide-x md:divide-y-0 dark:divide-white/5">
+      {% for o in p.options %}
+      <a href="{% url 'web:reroute' p.s.id %}" class="block p-5 transition hover:bg-ink-50 dark:hover:bg-white/[.03]">
+        <div class="flex items-center justify-between gap-2">
+          <span class="flex items-center gap-2 text-xs muted"><span class="h-1 w-5 rounded-full" style="background: {{ o.color }}"></span>Option {{ forloop.counter }}</span>
+          {% if o.recommended %}<span class="inline-flex items-center gap-1 text-xs font-medium text-brand-600 dark:text-brand-300">{% icon "star" "size-3" %}Recommended</span>{% endif %}
+        </div>
+        <p class="mt-2 font-medium leading-snug">{{ o.label }}</p>
+        <div class="mt-3 flex items-end gap-5">
+          <div><p class="text-xs muted">Extra cost</p><p class="text-lg font-semibold tabular-nums">{{ o.total_extra_cost|eur_signed }}</p></div>
+          <div><p class="text-xs muted">Extra time</p><p class="text-lg font-semibold tabular-nums">{% if o.delay_days %}+{{ o.delay_days }} day{{ o.delay_days|pluralize }}{% else %}none{% endif %}</p></div>
+          <div class="ml-auto text-right"><p class="text-xs muted">Risk</p><p class="text-sm font-medium {% if o.risk == 'high' %}text-rose-600 dark:text-rose-400{% elif o.risk == 'medium' %}text-amber-600 dark:text-amber-400{% else %}text-emerald-600 dark:text-emerald-400{% endif %}">{{ o.risk|capfirst }}</p></div>
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </section>
+  {% empty %}
+  <section class="card flex items-center gap-3 p-4">
+    <span class="grid size-9 place-items-center rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-300">{% icon "check" %}</span>
+    <div><p class="text-sm font-medium">All routes are clear</p><p class="text-xs muted">If a corridor or port runs into trouble, the problem and its alternatives show up here.</p></div>
+  </section>
+  {% endfor %}
+
+  <!-- Map + shipments -->
+  <section class="card overflow-hidden">
+    <div class="grid grid-cols-1 lg:grid-cols-[1fr_320px]">
+      <div id="overview-map" class="h-[420px] lg:h-[600px]"></div>
+      <div class="flex flex-col border-t border-ink-100 lg:border-l lg:border-t-0 dark:border-white/5">
+        <div class="flex items-center justify-between px-5 pb-2 pt-4">
+          <p class="card-title">Shipments</p>
+          <a href="{% url 'web:shipments' %}" class="btn btn-ghost btn-sm -mr-2">All {% icon "arrow-right" "size-3.5" %}</a>
+        </div>
+        <ul class="flex-1 overflow-y-auto px-2 pb-2 lg:max-h-[540px]">
+          {% for s in shipments %}
+          <li>
+            <button type="button" data-select="{{ s.id }}" class="ship-item w-full rounded-xl px-3 py-3 text-left transition hover:bg-ink-50 dark:hover:bg-white/[.04]">
+              <div class="flex items-center justify-between gap-2">
+                <span class="flex min-w-0 items-center gap-2">
+                  <span class="size-2 shrink-0 rounded-full" style="background: {% if s.status == 'ON_TRACK' %}#10b981{% elif s.status == 'ATTENTION' %}#f59e0b{% elif s.status == 'PROBLEM' %}#e11d48{% else %}#8a8a82{% endif %}"></span>
+                  <span class="truncate text-sm font-medium">{{ s.ref }}</span>
+                </span>
+                <span class="text-ink-400">{% if s.mode == 'SEA' %}{% icon "ship" "size-3.5" %}{% elif s.mode == 'AIR' %}{% icon "plane" "size-3.5" %}{% else %}{% icon "truck" "size-3.5" %}{% endif %}</span>
+              </div>
+              <p class="mt-0.5 truncate pl-4 text-xs muted">{{ s.origin }} → {{ s.destination }}</p>
+              <p class="mt-1 pl-4 text-xs">{% if s.status == 'ARRIVED' %}<span class="muted">Arrived {{ s.eta_current|date:"j M" }}</span>{% else %}ETA {{ s.eta_current|date:"j M" }}{% if s.alerts %} · <span class="font-medium text-rose-600 dark:text-rose-400">needs a decision</span>{% endif %}{% endif %}</p>
+            </button>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </section>
+</div>
+{{ map_data|json_script:"map-data" }}
+{% endblock %}
+{% block scripts %}
+<script>
+  window.addEventListener('load', () => {
+    const data = JSON.parse(document.getElementById('map-data').textContent);
+    const m = MonoraMap.init(document.getElementById('overview-map'), data, {
+      cooperative: true, padding: 50, traffic: true,
+      onSelect: (s) => (location.href = s.status === 'ATTENTION' || s.status === 'PROBLEM' ? `/shipments/${s.id}/reroute/` : `/shipments/${s.id}/`),
+    });
+    document.querySelectorAll('[data-select]').forEach((b) => b.addEventListener('click', () => {
+      const id = +b.dataset.select; m.select(id); m.flyTo(id);
+      document.querySelectorAll('.ship-item').forEach((x) => x.classList.toggle('bg-ink-100', x === b));
+    }));
+  });
+</script>
+{% endblock %}

@@ -59,6 +59,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "web.context_processors.ui",  # C: current user, nav badges, AIS status
             ],
         },
     },
@@ -89,9 +90,9 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
-LOGIN_URL = "login"
+LOGIN_URL = "web:login"  # /login/ (web.views.login_view, Django auth)
 LOGIN_REDIRECT_URL = "/"
-LOGOUT_REDIRECT_URL = "login"
+LOGOUT_REDIRECT_URL = "web:login"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -114,6 +115,23 @@ GOOGLE_MAPS_API_KEY = env_str("GOOGLE_MAPS_API_KEY")
 DEMO_MODE = env_str("DEMO_MODE", "live")  # "live" | "replay"
 if DEMO_MODE not in {"live", "replay"}:
     raise ValueError(f"DEMO_MODE must be 'live' or 'replay', got {DEMO_MODE!r}")
+# Replay clock for the live map (SEA/RAIL; AIR/ROAD replay in real time).
+# 1000 = one wall-clock minute moves a ship ~16 h along its route.
+REPLAY_SPEED = float(env_str("REPLAY_SPEED", env_str("DEMO_REPLAY_SPEEDUP", "1000")))
+# Live mode: no real fix for this long -> advance along the approved route ("interpolated").
+INTERPOLATE_AFTER_SECONDS = 3600
+INTERPOLATE_AFTER_SECONDS_BY_MODE = {"AIR": 120}  # planes move ~15 km/min: estimate between OpenSky fixes
+PROMPT_VERSION = env_str("PROMPT_VERSION", "v1")  # stored in every AgentRun
+
+# Collectors (manage.py run_collectors)
+# OpenSky meters API credits (anonymous ~400/day, an API client ~4000/day; ~4 per aircraft poll):
+# poll AIR every 60 s with credentials, every 5 min without. OPENSKY_POLL_SECONDS overrides.
+OPENSKY_POLL_SECONDS = int(env_str("OPENSKY_POLL_SECONDS", "60" if OPENSKY_CLIENT_ID else "300"))
+# The AIR loop runs every 60 s (it also moves planes between fixes); OpenSkyProvider itself
+# calls OpenSky at most every OPENSKY_POLL_SECONDS.
+COLLECTOR_POLL_SECONDS = {"SEA": 30, "AIR": 60, "ROAD": 60, "RAIL": 60}
+WATCHDOG_SECONDS = 300
+TRACKS_FILE = BASE_DIR / "sample_data" / "tracks.json"
 
 # Savings counter inputs (placeholders until we cite a benchmark).
 MANUAL_MINUTES_PER_DOC = float(env_str("MANUAL_MINUTES_PER_DOC", "15"))
@@ -121,3 +139,20 @@ HOURLY_COST_EUR = float(env_str("HOURLY_COST_EUR", "40"))
 
 SAMPLE_DATA_DIR = BASE_DIR / "sample_data"
 OUTBOX_DIR = BASE_DIR / "outbox"  # "sent" weekly reports land here
+
+# The paying company: debtor in the SEPA file, bill-to on every invoice. FICTIONAL.
+DEMO_COMPANY = {
+    "name": "Monora Trading S.r.l.",
+    "vat_number": "IT12038475666",
+    "address": "Via Nizza 150, 10126 Torino (TO), IT",
+    "iban": "IT19H0306901000100000012345",  # checksum-valid, belongs to nobody
+}
+
+# Weekly report "sending": always written to OUTBOX_DIR; also emailed through
+# EMAIL_BACKEND (console by default = printed in the web container log).
+EMAIL_BACKEND = env_str("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+DEFAULT_FROM_EMAIL = env_str("DEFAULT_FROM_EMAIL", "autopilot@monora.example")
+REPORT_RECIPIENTS = [r for r in env_str("REPORT_RECIPIENTS", "finance@monora.example").split(",") if r]
+
+# A stale form (after login / demo_reset) reloads the page with a message instead of a raw 403.
+CSRF_FAILURE_VIEW = "monora.views.csrf_failure"
