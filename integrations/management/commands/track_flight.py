@@ -4,12 +4,17 @@
   python manage.py track_flight --list --callsign UAE9              # UAE9xxx = Emirates SkyCargo
   python manage.py track_flight --list --callsign UAE --bbox 15,35,45,62
   python manage.py track_flight "AWB 176-2290" UAE9845               # or the ICAO24: 8960d2
+  python manage.py track_flight "AWB 176-2290" UAE9393 --route "DWC LGG ORD"   # + route = its airports
+  python manage.py track_flight "AWB 176-2290" --route "DWC LGG ORD"           # only change the route
 """
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from core.models import Shipment
-from integrations.flights import DEFAULT_BBOX, FlightError, bind, find_flights
+from django.contrib.auth import get_user_model
+
+from integrations.airports import parse_codes
+from integrations.flights import DEFAULT_BBOX, FlightError, align_route, bind, find_flights
 
 
 class Command(BaseCommand):
@@ -22,6 +27,8 @@ class Command(BaseCommand):
         parser.add_argument("--callsign", default="", help="Callsign prefix filter for --list (e.g. UAE, UAE9)")
         parser.add_argument("--bbox", default=",".join(str(v) for v in DEFAULT_BBOX),
                             help="lamin,lomin,lamax,lomax (default: Middle East)")
+        parser.add_argument("--route", default="", help='Airports start..end, e.g. "DWC LGG ORD" (IATA or ICAO)')
+        parser.add_argument("--as-user", default="marco", help="Manager who approves the route change (default marco)")
 
     def handle(self, *args, **opts):
         try:
@@ -37,16 +44,25 @@ class Command(BaseCommand):
                     )
                 self.stdout.write(self.style.SUCCESS(f"{len(flights)} flight(s)"))
                 return
-            if not opts["flight"]:
-                raise CommandError("give a callsign or ICAO24 after the shipment ref")
             shipment = Shipment.objects.filter(ref=opts["shipment"]).first()
             if shipment is None:
                 raise CommandError(f"no shipment {opts['shipment']!r}")
-            f = bind(shipment, opts["flight"], actor_name="track_flight")
+            if not opts["flight"] and not opts["route"]:
+                raise CommandError("give a callsign / ICAO24 and/or --route")
+            if opts["flight"]:
+                f = bind(shipment, opts["flight"], actor_name="track_flight")
+                sug = f["suggestion"]
+                self.stdout.write(self.style.SUCCESS(
+                    f"{shipment.ref} now follows {f['callsign'] or '?'} (icao24 {f['icao24']}) at {f['lat']:.3f},{f['lon']:.3f}"))
+                if sug["codes"]:
+                    fit = "fits its position" if sug["on_route"] else f"is {sug['distance_km']} km off its position (outdated?)"
+                    self.stdout.write(f"adsbdb route: {' -> '.join(sug['codes'])} {fit}")
+            if opts["route"]:
+                user = get_user_model().objects.get(username=opts["as_user"])
+                s = align_route(Shipment.objects.get(pk=shipment.pk), parse_codes(opts["route"]), user=user,
+                                note="set with track_flight --route")
+                self.stdout.write(self.style.SUCCESS(f"route: {s.origin} -> {s.destination} ({s.route.label if s.route else ''})"))
         except FlightError as exc:
             raise CommandError(str(exc))
-        self.stdout.write(self.style.SUCCESS(
-            f"{shipment.ref} now follows {f['callsign'] or '?'} (icao24 {f['icao24']}) at {f['lat']:.3f},{f['lon']:.3f}"
-        ))
         if settings.DEMO_MODE != "live":
             self.stdout.write(self.style.WARNING("DEMO_MODE is not 'live': collectors will replay instead of polling OpenSky."))

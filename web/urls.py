@@ -23,6 +23,7 @@ urlpatterns = [
     path("shipments/<int:sid>/reroute/", views.reroute, name="reroute"),
     path("shipments/<int:sid>/flights/", views.shipment_flights, name="shipment_flights"),
     path("shipments/<int:sid>/track/", views.shipment_track, name="shipment_track"),
+    path("shipments/<int:sid>/flight-route/", views.shipment_flight_route, name="shipment_flight_route"),
     path("shipments/<int:sid>/reroute/propose/", views.reroute_propose, name="reroute_propose"),
     path("route-options/<int:oid>/review/", views.route_review, name="route_review"),
     path("route-options/<int:oid>/approve/", views.route_approve, name="route_approve"),

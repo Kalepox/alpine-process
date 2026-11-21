@@ -86,14 +86,34 @@ def create_planning_shipment(request: dict, *, user) -> Shipment:
     return shipment
 
 
-def set_tracker(shipment: Shipment, tracker_id: str, *, actor_name: str, actor_user=None, note: str = "") -> Shipment:
-    """Bind a shipment to a real vessel / aircraft (MMSI, ICAO24 or plate). Audited."""
-    before = {"tracker_id": shipment.tracker_id}
+def set_tracker(shipment: Shipment, tracker_id: str, *, actor_name: str, actor_user=None, note: str = "",
+                info: dict | None = None) -> Shipment:
+    """Bind a shipment to a real vessel / aircraft (MMSI, ICAO24 or plate). Audited.
+    `info` (callsign, suggested route, ...) is kept in Shipment.request["tracking"]."""
+    before = {"tracker_id": shipment.tracker_id, "tracking": (shipment.request or {}).get("tracking")}
     shipment.tracker_id = tracker_id.strip().lower() if shipment.mode == "AIR" else tracker_id.strip()
-    shipment.save(update_fields=["tracker_id", "updated_at"])
+    shipment.request = {**(shipment.request or {}), "tracking": audit.json_safe(info or {})}
+    shipment.save(update_fields=["tracker_id", "request", "updated_at"])
     audit.log(
         "shipment.tracker_changed", actor_type="user" if actor_user else "system", actor_name=actor_name,
-        actor_user=actor_user, shipment=shipment, before=before, after={"tracker_id": shipment.tracker_id},
+        actor_user=actor_user, shipment=shipment, before=before,
+        after={"tracker_id": shipment.tracker_id, "tracking": shipment.request["tracking"]}, detail=note,
+    )
+    return shipment
+
+
+def update_endpoints(shipment: Shipment, *, origin: str, origin_latlon: list[float], destination: str,
+                     dest_latlon: list[float], actor_name: str, actor_user=None, note: str = "") -> Shipment:
+    """Correct where a shipment starts and ends (e.g. to the real flight's airports). Audited."""
+    fields = ["origin", "origin_latlon", "destination", "dest_latlon"]
+    before = {f: getattr(shipment, f) for f in fields}
+    shipment.origin, shipment.destination = origin[:120], destination[:120]
+    setattr(shipment, "origin_latlon", [float(origin_latlon[0]), float(origin_latlon[1])])  # JSONField
+    setattr(shipment, "dest_latlon", [float(dest_latlon[0]), float(dest_latlon[1])])
+    shipment.save(update_fields=fields + ["updated_at"])
+    audit.log(
+        "shipment.endpoints_changed", actor_type="user" if actor_user else "system", actor_name=actor_name,
+        actor_user=actor_user, shipment=shipment, before=before, after={f: getattr(shipment, f) for f in fields},
         detail=note,
     )
     return shipment

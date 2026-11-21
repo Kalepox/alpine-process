@@ -278,4 +278,22 @@ def track_flight(shipment_id, user, flight):
         f = bind(s, flight, actor_name=u.get_username(), actor_user=u)
     except FlightError as exc:
         raise ActionError(str(exc))
-    return {"id": s.pk, "ref": s.ref, "callsign": f["callsign"] or f["icao24"], "icao24": f["icao24"]}
+    return {"id": s.pk, "ref": s.ref, "callsign": f["callsign"] or f["icao24"], "icao24": f["icao24"],
+            "suggestion": f["suggestion"]}
+
+
+def align_flight_route(shipment_id, user, codes_text):
+    """Route = the flight's airports (start, stopovers, end). Manager only (it's a route approval)."""
+    from integrations.airports import parse_codes
+    from integrations.flights import FlightError, align_route
+
+    u = _u(user)
+    s = Shipment.objects.filter(pk=shipment_id).first()
+    if s is None:
+        raise ActionError("Shipment not found.")
+    codes = parse_codes(codes_text)
+    try:
+        s = _call(align_route, s, codes, user=u, note="confirmed in the UI")
+    except FlightError as exc:
+        raise ActionError(str(exc))
+    return {"id": s.pk, "ref": s.ref, "route": " → ".join(codes)}

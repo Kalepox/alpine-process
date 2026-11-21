@@ -7,6 +7,7 @@ same as the old mock (web/mock_data.py), so templates and map.js didn't change.
 """
 from __future__ import annotations
 
+import re
 from datetime import timedelta
 from typing import Any
 from decimal import Decimal as D
@@ -16,7 +17,7 @@ from django.utils import timezone
 
 from core.banking import normalize_iban
 from core.checklists import required_kinds
-from core.geo import geometry_latlon, legs_latlon, route_path
+from core.geo import geometry_latlon, great_circle, legs_latlon, locate_on_path, route_path
 from core.models import (
     Alert, AuditEvent, Corridor, CostLine, CustomsRate, ExpenseDocument, ExportBatch, Position, PreApproval,
     RouteOption, Shipment, ShipmentDocument, Vendor, WeeklyReport,
@@ -108,6 +109,41 @@ def _cost_line_dict(c: CostLine) -> dict[str, Any]:
                 preapproval=f"PA-{c.preapproval_id:04d}" if c.preapproval_id else None, note=c.note)
 
 
+_CODE_IN_LABEL = re.compile(r"\(([A-Z0-9]{3,4})\)$")
+
+
+def _route_airports(route) -> list[str]:
+    """['DWC', 'LGG', 'ORD'] for a flight route whose legs are labelled 'Liège (LGG)'."""
+    if route is None or not route.legs:
+        return []
+    labels = [leg.get("from", "") for leg in route.legs] + [route.legs[-1].get("to", "")]
+    codes = [m.group(1) for m in (_CODE_IN_LABEL.search(x or "") for x in labels) if m]
+    return codes if len(codes) == len(labels) else []
+
+
+def _legs_through(s: Shipment, pos: dict) -> list[dict]:
+    """The approved route's legs for the map, with the leg the shipment is on redrawn
+    through its current position, so the line always passes through the marker.
+    Display only: the stored (approved) route geometry is never changed."""
+    route = s.route if s.route_id else None
+    if route is None:
+        return []
+    legs = legs_latlon(route)
+    if pos.get("source") == "planned" or not legs:
+        return legs
+    here = [pos["lat"], pos["lon"]]
+    i = min(s.current_leg_index, len(legs) - 1)
+    coords = legs[i]["coords"]
+    if len(coords) < 2:
+        return legs
+    if legs[i]["mode"] == "AIR":  # flights: start -> plane -> next stop, as great-circle arcs
+        new = great_circle(coords[0], here, 32) + great_circle(here, coords[-1], 32)[1:]
+    else:  # ships / trucks follow lanes and roads: splice the position into the path
+        _, _, seg = locate_on_path(coords, here)
+        new = coords[: seg + 1] + [here] + coords[seg + 1:]
+    return legs[:i] + [dict(legs[i], coords=new)] + legs[i + 1:]
+
+
 def _ship_light(s: Shipment, cmap: dict | None = None):
     cmap = cmap if cmap is not None else {c.code: c for c in Corridor.objects.all()}
     pos = _position(s)
@@ -129,9 +165,11 @@ def _ship_light(s: Shipment, cmap: dict | None = None):
         documents=[(d.kind, d.status) for d in s.documents.order_by("kind")],
         corridor=code, corridor_obj=_corridor_dict(cmap.get(code)) if code else None,
         route_id=s.route_id, route_label=s.route.label if s.route_id and s.route else "",
-        legs=legs_latlon(s.route) if s.route_id and s.route else [],
+        legs=_legs_through(s, pos),
         live=dict(name=s.tracker_id, mmsi=s.tracker_id if s.mode == "SEA" else None) if live else None,
         manual=False, port=None,
+        tracking=(s.request or {}).get("tracking") or {},
+        route_codes=_route_airports(s.route if s.route_id else None),
     )
     out["alerts"] = [_alert_dict(a) for a in s.alerts.filter(resolved=False).order_by("-created_at")]
     out["delay_hours"] = (int((s.eta_current - s.eta_planned).total_seconds() // 3600)

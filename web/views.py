@@ -381,6 +381,24 @@ def shipment_flights(request, sid):
 @login_required
 @require_POST
 def shipment_track(request, sid):
-    _run(request, actions.track_flight, sid, current_user(request), request.POST.get("flight", ""),
-         ok=lambda r: f"{r['ref']} now follows flight {r['callsign']} (live from OpenSky).")
+    def ok(r):
+        sug = r["suggestion"]
+        if sug["codes"] and sug["on_route"]:
+            hint = f" Suggested route {' → '.join(sug['codes'])} fits its position: check it and click 'Use this route'."
+        elif sug["codes"]:
+            hint = (f" The listed route {' → '.join(sug['codes'])} doesn't fit where the plane is "
+                    f"({sug['distance_km']} km off): type the real airports below.")
+        else:
+            hint = " No route on file for this callsign: type its airports below (e.g. DWC LGG ORD)."
+        return f"{r['ref']} now follows flight {r['callsign']} (live from OpenSky).{hint}"
+
+    _run(request, actions.track_flight, sid, current_user(request), request.POST.get("flight", ""), ok=ok)
+    return redirect("web:shipment", sid=sid)
+
+
+@login_required
+@require_POST
+def shipment_flight_route(request, sid):
+    _run(request, actions.align_flight_route, sid, current_user(request), request.POST.get("airports", ""),
+         ok=lambda r: f"{r['ref']} now flies {r['route']}.")
     return redirect("web:shipment", sid=sid)

@@ -192,3 +192,37 @@ def walk(path: list[list[float]], km: float) -> tuple[list[float], float, bool]:
             return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], heading, False
         km -= leg
     return list(path[-1]), heading, True
+
+
+def great_circle(a: list[float], b: list[float], n: int = 48) -> list[list[float]]:
+    """n+1 points on the great circle from a to b ([lat, lon]): how flights are drawn."""
+    lat1, lon1, lat2, lon2 = map(math.radians, (a[0], a[1], b[0], b[1]))
+    d = 2 * math.asin(math.sqrt(math.sin((lat2 - lat1) / 2) ** 2
+                                + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2))
+    if d == 0:
+        return [list(a), list(b)]
+    out = []
+    for i in range(n + 1):
+        f = i / n
+        A, B = math.sin((1 - f) * d) / math.sin(d), math.sin(f * d) / math.sin(d)
+        x = A * math.cos(lat1) * math.cos(lon1) + B * math.cos(lat2) * math.cos(lon2)
+        y = A * math.cos(lat1) * math.sin(lon1) + B * math.cos(lat2) * math.sin(lon2)
+        z = A * math.sin(lat1) + B * math.sin(lat2)
+        out.append([math.degrees(math.atan2(z, math.hypot(x, y))), math.degrees(math.atan2(y, x))])
+    return out
+
+
+def distance_to_path_km(path: list[list[float]], point: list[float]) -> float:
+    """Shortest distance from point to the polyline (approximate, fine for sanity checks)."""
+    if not path:
+        return float("inf")
+    _, _, seg = locate_on_path(path, point)
+    if len(path) < 2:
+        return haversine_km(path[0], point)
+    best = min(haversine_km(p, point) for p in path)
+    # densify the nearest segment for a closer answer
+    a, b = path[seg], path[min(seg + 1, len(path) - 1)]
+    for i in range(21):
+        t = i / 20
+        best = min(best, haversine_km([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], point))
+    return best
