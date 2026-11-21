@@ -47,7 +47,8 @@ doc_explainer = LlmAgent(
     description="Explains rule findings on an expense document in plain language.",
     instruction="""You receive an expense document's extracted fields and the issues found by deterministic rules.
 Write a short summary and, for EACH issue (same codes, same order), a clear message and suggested action
-for an accounts-payable reviewer. Do not add, drop or soften issues. Use only numbers present in the input.
+for an accounts-payable reviewer. Do not add, drop or soften issues. Use only numbers present in the input
+(rounding is fine); never compute new ones.
 For IBAN_CHANGED always keep the advice to verify through the vendor master's contact details.""",
     output_schema=DocExplanation,
     output_key="explanation",

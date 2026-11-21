@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 from typing import Any
 
 from google.adk.agents import BaseAgent
@@ -79,7 +80,26 @@ async def _run(runner: Runner, agent: BaseAgent, message, run, state) -> Any:
     return session.state.get(output_key) if output_key else dict(session.state)
 
 
+_loop: asyncio.AbstractEventLoop | None = None
+_loop_lock = threading.Lock()
+
+
+def _agent_loop() -> asyncio.AbstractEventLoop:
+    """One long-lived event loop (daemon thread) for every agent run in this process.
+
+    The agents are module-level, so their Gemini client and its HTTP connections must stay on a
+    single loop: a fresh asyncio.run() per call left connections tied to closed loops.
+    """
+    global _loop
+    with _loop_lock:
+        if _loop is None or _loop.is_closed():
+            _loop = asyncio.new_event_loop()
+            threading.Thread(target=_loop.run_forever, name="monora-agents", daemon=True).start()
+        return _loop
+
+
 def run_agent_sync(agent: BaseAgent, message: str | list[types.Part], *, run, state: dict | None = None, log=None,
                    timeout_s: float | None = None) -> Any:
-    """Pipelines run in a worker thread with no event loop, so asyncio.run is safe here."""
-    return asyncio.run(run_agent(agent, message, run=run, state=state, log=log, timeout_s=timeout_s))
+    """Called from sync pipeline threads; blocks until the agent run on the shared loop finishes."""
+    coro = run_agent(agent, message, run=run, state=state, log=log, timeout_s=timeout_s)
+    return asyncio.run_coroutine_threadsafe(coro, _agent_loop()).result()

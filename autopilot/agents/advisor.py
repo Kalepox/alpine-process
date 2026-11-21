@@ -25,8 +25,9 @@ Rules:
   request's priorities; choose another only for a clear reason visible in the data (e.g. a deadline or
   corridor risk the score underweights) and say why.
 - rationale: 2-3 sentences for an operations manager. tradeoffs: one short sentence per option, by key.
-- Use ONLY facts in the JSON. Every number you write must appear in the JSON exactly as given
-  (e.g. "28.6 days", "18% closure risk"). Prefer words ("faster", "cheaper", "riskier") over numbers.
+- Use ONLY facts in the JSON. Every number you write must be a value from the JSON (you may round it,
+  e.g. "about 31 days" for 30.9). Never compute new numbers: no differences, sums, ratios or percentages
+  of your own ("2888 cheaper" is not allowed; say "cheaper" or quote both costs). Prefer words.
 - plan_b_required: true if the recommended option has a possible disruption with p_close_pct >= 15.
 - mode "plan": reroute_or_wait is "NA".
 - mode "replan": the cargo is already moving and a corridor on its route is closed. Options are reroutes
@@ -88,14 +89,26 @@ def advisor_payload(request: RoutingRequest, options: list[RouteOptionDTO], repl
 
 
 _KEY = re.compile(r"\bR\d+(?:-B)?\b")
-_NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
+_TEXT_NUMBER = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")  # "273,001" / "28.6" / "18"
+_JSON_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")                            # JSON has no thousands separators
 
 
 def ungrounded_numbers(text: str, payload: dict) -> set[str]:
-    """Numbers in the advisor's text that do not occur in the payload (small counts are fine)."""
-    allowed = set(_NUMBER.findall(json.dumps(payload)))
-    found = {n.replace(",", "") for n in _NUMBER.findall(_KEY.sub("", text))}
-    return {n for n in found if n not in allowed and not (n.isdigit() and int(n) <= 12)}
+    """Numbers in the advisor's text that are not values from the payload, allowing rounding.
+
+    "31 days" for 30.9 and "EUR 9,041" for 9040.71 are fine; a difference or ratio Gemini computed
+    itself is not (it may be wrong). Small counts (<= 12) and option keys are ignored.
+    """
+    allowed = [float(n) for n in _JSON_NUMBER.findall(json.dumps(payload))]
+    bad = set()
+    for token in _TEXT_NUMBER.findall(_KEY.sub("", text)):
+        plain = token.replace(",", "")
+        value, decimals = float(plain), len(plain.split(".")[1]) if "." in plain else 0
+        if value.is_integer() and value <= 12:
+            continue
+        if not any(abs(round(a, decimals) - value) < 1e-9 for a in allowed):
+            bad.add(plain)
+    return bad
 
 
 def validate_verdict(raw: dict | None, options: list[RouteOptionDTO], payload: dict) -> tuple[AdvisorVerdict | None, str]:

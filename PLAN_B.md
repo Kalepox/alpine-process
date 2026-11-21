@@ -162,6 +162,9 @@ route_advisor then returns `reroute_or_wait` and its rationale. The pipeline cal
     - `test_safety.FORBIDDEN_NAMES`: add `approve_route`.
 14. `sample_data/MANIFEST.md`, one line per file: `- war_risk.pdf: OVER_PREAPPROVAL` or `- freight_ok.pdf: clean`. The war-risk invoice needs a line item that says "war risk".
 15. docker-compose: add a `monitor` service running `python manage.py monitor_routes` (same image as `web`).
+16. **Gemini runs on Vertex AI with Application Default Credentials (ADC)**, not an API key (see §B2.18).
+    - Containers that run agents (`web`, `monitor`, `adk`) need the host's credentials, mounted read-only: `~/.config/gcloud:/root/.config/gcloud:ro`.
+    - They also need `GOOGLE_GENAI_USE_VERTEXAI=TRUE`, `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION=global` from `.env`. Without them, the agents fall back to their deterministic paths.
 
 **For C**
 - **Pipelines to call in a thread** (`threading.Thread`, never from an async view):
@@ -316,3 +319,23 @@ adk web autopilot/adk_app                        # optional: assistant tool call
 **Still open (needs the key or A)**
 - Live Gemini check of `intent_agent`, `route_advisor`, `risk_scout` and the expense agents: put `GOOGLE_API_KEY` in `.env` and run `eval_agents` (the risk and docs rows).
 - The ORM entrypoints (`plan_routes`, `replan`, `scan`/`simulate`, `monitor_routes`, `process_document`) run end to end once A ships §B2.8. Their pure cores are tested.
+
+## B2.18 Gemini setup and the first live run (H18)
+**Connection: Vertex AI + ADC**
+- Set up with Google's `setup_adc.sh` (`gcloud auth application-default login`).
+- `.env` contains `GOOGLE_API_KEY=` (empty), `GOOGLE_GENAI_USE_VERTEXAI=TRUE`, `GOOGLE_CLOUD_PROJECT=<id>`, `GOOGLE_CLOUD_LOCATION=global` and `GEMINI_MODEL=gemini-3.8-flash`.
+- Use the `global` location: regional endpoints may not serve the newest models.
+- Checked live: generation works (about 3–4 s for a short answer, 5–15 s per agent call), and Google Search grounding returns sources.
+
+**Fixed after the first live eval**
+- **Event loop:** `run_agent_sync` used `asyncio.run` per call. The module-level agents share one Gemini client, so its HTTP connections were left tied to closed loops ("Event loop is closed").
+  - All agent runs now go to **one long-lived loop in a daemon thread** (`runner._agent_loop`).
+  - The fake model in the tests has no HTTP client, so this only showed up live.
+- **The number-grounding guard had a bug.** JSON numbers were captured with their trailing comma (`273001,`), so real values were rejected.
+  - It now compares numeric values and accepts rounding of a real value. It still rejects numbers Gemini computes itself (differences, ratios), and the prompts now say so explicitly.
+- **Tests are hermetic:** `autopilot/tests/conftest.py` turns real Gemini off for every test whatever `.env` says. Tests that need an agent script a `FakeLlm`.
+
+**Live result (before the guard fix)**
+- risk: 5 of 5 correct.
+- Solver invariants: 11 of 11.
+- The 5 failures were all guard rejections: 3 from the comma bug, 2 from genuinely computed numbers.

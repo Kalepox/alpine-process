@@ -53,4 +53,11 @@ def test_verdict_validation(plan):
 
 def test_ungrounded_numbers_ignores_keys_and_small_counts():
     assert ungrounded_numbers("R12 and R1-B: 3 transfers, 28.6 days", {"x": 28.6}) == set()
-    assert ungrounded_numbers("costs 9,041 EUR", {"x": 9040.71}) == {"9041"}
+
+
+def test_ungrounded_numbers_accepts_real_values_rounded_rejects_computed():
+    payload = {"options": [{"landed_cost_eur": 273001, "closure_risk_pct": 47, "days_p90": 30.9},
+                           {"landed_cost_eur": 9040.71, "break_even_days": 18.0}]}
+    ok = "R5 costs EUR 273,001 with 47% closure risk, about 31 days; R2 EUR 9,041; waiting wins within 18 days."
+    assert ungrounded_numbers(ok, payload) == set()            # regression: "273001," used to miss
+    assert ungrounded_numbers("R1 is 263960 cheaper", payload) == {"263960"}  # a difference Gemini computed
