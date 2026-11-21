@@ -280,6 +280,7 @@ class AuditEventAdmin(admin.ModelAdmin):
     date_hierarchy = "ts"
     readonly_fields = [f.name for f in m.AuditEvent._meta.fields]
     list_select_related = ("shipment", "document")
+    actions = None  # no bulk actions at all (incl. "delete selected")
 
     @admin.display(description="detail")
     def short_detail(self, obj):
@@ -293,6 +294,3 @@ class AuditEventAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
-
-    def get_actions(self, request):
-        return {}

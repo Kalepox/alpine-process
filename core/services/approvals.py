@@ -8,6 +8,7 @@ Humans only:       decide_preapproval, decide_payment, decide_report_send, resol
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -256,7 +257,7 @@ def set_doc_status(
 
 def create_issues(
     doc_or_shipment: ExpenseDocument | Shipment,
-    drafts: list[IssueDraft],
+    drafts: Sequence[IssueDraft | dict],
     *,
     actor_name: str,
 ) -> list[Issue]:
@@ -273,7 +274,7 @@ def create_issues(
     result = []
     with transaction.atomic():
         for draft in drafts:
-            data = draft.model_dump() if hasattr(draft, "model_dump") else dict(draft)
+            data = dict(draft) if isinstance(draft, dict) else draft.model_dump()
             code, severity = data["code"], data.get("severity", Severity.BLOCK)
             if code not in Issue.Code.values:
                 raise ValueError(f"unknown issue code {code!r}")
@@ -361,15 +362,16 @@ def _cancel_pending_payments(doc: ExpenseDocument, user, reason: str) -> None:
 # payments
 # --------------------------------------------------------------------------
 def _payment_payload(doc: ExpenseDocument) -> dict:
+    vendor, shipment = doc.vendor, doc.shipment
     return {
         "amount": str(_money(doc.total)),
         "currency": doc.currency,
         "iban": normalize_iban(doc.iban),
-        "vendor": doc.vendor.name if doc.vendor_id else (doc.extracted or {}).get("vendor_name", ""),
+        "vendor": vendor.name if vendor is not None else (doc.extracted or {}).get("vendor_name", ""),
         "vendor_id": doc.vendor_id,
         "document_id": doc.pk,
         "document_number": doc.number,
-        "shipment": doc.shipment.ref if doc.shipment_id else None,
+        "shipment": shipment.ref if shipment is not None else None,
         "category": doc.category,
         "date": doc.date.isoformat() if doc.date else None,
     }
@@ -492,5 +494,56 @@ def request_report_send(report: WeeklyReport, *, requested_by: str) -> PendingAc
 
 
 def decide_report_send(pending_action_id: int, user, approve: bool, note: str = "") -> WeeklyReport:
-    """perm core.approve_spend. On approve -> SENT (demo: write to outbox/)."""
-    raise NotImplementedError("TODO(A.5): decide_report_send")
+    """perm core.approve_spend.
+
+    Approve: DRAFT -> APPROVED -> SENT. "Sending" = write outbox/weekly_report_<start>_<end>.md
+    and email it via EMAIL_BACKEND (console by default). Reject: report stays DRAFT.
+    """
+    _require_perm(user, "core.approve_spend")
+    username = user.get_username()
+    with transaction.atomic():
+        pa = PendingAction.objects.select_for_update().get(pk=pending_action_id)
+        if pa.action_type != PendingAction.ActionType.SEND_REPORT:
+            raise InvalidTransition(f"pending action {pa.pk} is not a report send")
+        if pa.status != ApprovalStatus.PENDING:
+            raise InvalidTransition(f"report send {pa.pk} already {pa.status}")
+        report = WeeklyReport.objects.select_for_update().get(pk=pa.report_id)
+        before = audit.snapshot(report)
+        now = timezone.now()
+        pa.status = ApprovalStatus.APPROVED if approve else ApprovalStatus.REJECTED
+        pa.decided_by, pa.decided_at, pa.note = user, now, note
+        pa.save()
+
+        if not approve:
+            audit.log("report.send_rejected", actor_type="user", actor_name=username, actor_user=user,
+                      before=before, after=audit.snapshot(report), detail=note)
+            return report
+
+        if report.status != WeeklyReport.Status.DRAFT:
+            raise InvalidTransition(f"report {report.pk} is {report.status}, only DRAFT can be sent")
+        report.status, report.approved_by = WeeklyReport.Status.APPROVED, user
+        report.save()
+        path = _send_report(report)
+        report.status, report.sent_at = WeeklyReport.Status.SENT, timezone.now()
+        report.save()
+        audit.log("report.sent", actor_type="user", actor_name=username, actor_user=user,
+                  before=before, after={**audit.snapshot(report), "outbox_file": str(path)}, detail=note)
+    return report
+
+
+def _send_report(report: WeeklyReport):
+    """Write the report to the outbox and email it. Returns the file path."""
+    from django.conf import settings
+    from django.core.mail import send_mail
+
+    outbox = settings.OUTBOX_DIR
+    outbox.mkdir(parents=True, exist_ok=True)
+    path = outbox / f"weekly_report_{report.period_start:%Y-%m-%d}_{report.period_end:%Y-%m-%d}.md"
+    path.write_text(report.body_md or "", encoding="utf-8")
+    send_mail(
+        subject=f"Logistics spend report {report.period_start:%d %b} – {report.period_end:%d %b %Y}",
+        message=report.body_md or "",
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=settings.REPORT_RECIPIENTS,
+    )
+    return path

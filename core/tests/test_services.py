@@ -286,7 +286,10 @@ def test_seed_demo_is_idempotent_and_books_history():
     call_command("seed_demo")
     assert counts == (Shipment.objects.count(), ExpenseDocument.objects.count(), CostLine.objects.count())
     assert counts[0] == 6 and counts[1] == 13
-    assert set(ExpenseDocument.objects.values_list("status", flat=True)) == {"APPROVED"}
+    assert set(ExpenseDocument.objects.values_list("status", flat=True)) == {"EXPORTED"}
+    from core.models import ExportBatch
+
+    assert ExportBatch.objects.count() == 1 and ExportBatch.objects.get().documents.count() == 13
     assert Shipment.objects.get(ref="MV Karoo Spirit").status == "ATTENTION"
     freight = CostLine.objects.get(shipment__ref="MV Sundara Bay", category="FREIGHT")
     assert freight.actual == Decimal("247000.00")
@@ -295,6 +298,7 @@ def test_seed_demo_is_idempotent_and_books_history():
     for ref in ("MT Aurelia Grace", "MV Sundara Bay"):
         assert Shipment.objects.get(ref=ref).positions.get().lon > 43.4, ref
     karoo = Shipment.objects.get(ref="MV Karoo Spirit")
+    assert karoo.eta_current is not None and karoo.eta_planned is not None
     assert karoo.eta_current - karoo.eta_planned == timedelta(days=3)
 
 

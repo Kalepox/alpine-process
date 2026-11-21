@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timezone as dt_tz
 
 from integrations.base import PositionDTO, TrackingProvider
@@ -88,7 +88,7 @@ class AisStreamProvider(TrackingProvider):
     def healthy(self) -> bool:
         return bool(self.api_key) and super().healthy()
 
-    def subscription(self, mmsis: list[str]) -> dict:
+    def subscription(self, mmsis: Sequence[str | int]) -> dict:
         return {
             "APIKey": self.api_key,
             "BoundingBoxes": [[[-90, -180], [90, 180]]],

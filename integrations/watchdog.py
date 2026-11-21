@@ -42,7 +42,7 @@ def run_watchdog(now: datetime | None = None) -> list[Alert]:
         if limit and s.tracker_id and settings.DEMO_MODE == "live":
             latest = s.positions.exclude(source="replay").order_by("-ts").first()
             last_seen = latest.ts if latest else s.departed_at
-            if now - last_seen > limit:
+            if last_seen is not None and now - last_seen > limit:
                 where = f" (last at {latest.lat:.2f}, {latest.lon:.2f})" if latest else ""
                 signal = "AIS" if s.mode == "SEA" else "ADS-B"
                 raised.append(shipment_svc.raise_alert(

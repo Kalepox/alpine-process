@@ -62,6 +62,7 @@ def test_replay_follows_a_reroute(make_shipment, add_position, corridors):
     s.corridor = corridors["CAPE"]
     s.save()
     [after] = ReplayProvider("SEA").fetch([replay_key(s)])
+    assert before.heading is not None and after.heading is not None
     assert 270 < before.heading < 300  # west-north-west towards the Red Sea
     assert 225 < after.heading < 270  # south-west towards the Cape
 

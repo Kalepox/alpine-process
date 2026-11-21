@@ -1,9 +1,11 @@
 """Pure parsing: aisstream messages, OpenSky state vectors, Google polylines. No DB, no network."""
 import json
+from datetime import timedelta
 
 import pytest
 
 from integrations.aisstream import AisStreamProvider, parse_message
+from integrations.base import PositionDTO
 from integrations.opensky import parse_states
 from integrations.routes import decode_polyline
 
@@ -18,19 +20,25 @@ def ais(mtype="PositionReport", lat=66.02695, lon=12.25382, heading=235, cog=308
     })
 
 
+def parsed(raw) -> PositionDTO:
+    dto = parse_message(raw)
+    assert dto is not None
+    return dto
+
+
 def test_ais_position_report():
-    dto = parse_message(ais())
+    dto = parsed(ais())
     assert dto.tracker_id == "259000420" and dto.source == "aisstream"
     assert (dto.lat, dto.lon, dto.heading, dto.speed) == (66.02695, 12.25382, 235, 11.2)
-    assert dto.ts.year == 2026 and dto.ts.utcoffset().total_seconds() == 0
+    assert dto.ts.year == 2026 and dto.ts.utcoffset() == timedelta(0)
 
 
 def test_ais_heading_not_available_falls_back_to_cog():
-    assert parse_message(ais(heading=511)).heading == 308.0
+    assert parsed(ais(heading=511)).heading == 308.0
 
 
 def test_ais_nanosecond_timestamps():
-    assert parse_message(ais(time_utc="2026-11-21 10:12:03.318353123 +0000 UTC")).ts.second == 3
+    assert parsed(ais(time_utc="2026-11-21 10:12:03.318353123 +0000 UTC")).ts.second == 3
 
 
 @pytest.mark.parametrize("raw", [ais(mtype="ShipStaticData"), ais(lat=91), ais(lon=181), "not json", b"\x00"])
@@ -42,7 +50,7 @@ def test_ais_subscription_and_buffer():
     p = AisStreamProvider("KEY")
     sub = p.subscription([259000420])
     assert sub["APIKey"] == "KEY" and sub["FiltersShipMMSI"] == ["259000420"]
-    p._buffer["259000420"] = parse_message(ais())
+    p._buffer["259000420"] = parsed(ais())
     assert len(p.fetch(["259000420"])) == 1
     assert p.fetch(["259000420"]) == []  # drained
     assert not AisStreamProvider("").healthy()

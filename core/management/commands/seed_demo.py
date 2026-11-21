@@ -9,6 +9,7 @@ like what the demo produces live.
 """
 import io
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 
 from django.conf import settings
@@ -20,9 +21,12 @@ from django.db import transaction
 from django.utils import timezone
 
 from core import demo_data
+from core.checklists import required_kinds
 from core.geo import point_along, shipment_path
-from core.models import Budget, Corridor, CostLine, ExpenseDocument, Position, Shipment, Vendor
-from core.services import approvals, expenses, shipments as shipment_svc
+from core.models import (
+    Budget, Corridor, CostLine, CustomsRate, ExpenseDocument, Position, Shipment, ShipmentDocument, Vendor,
+)
+from core.services import approvals, expenses, export, shipments as shipment_svc
 
 DEMO_PASSWORD = "demo1234"
 SEED = "seed"  # actor name for everything this command does
@@ -65,7 +69,9 @@ class Command(BaseCommand):
             vendors = self.seed_vendors()
             corridors = self.seed_corridors()
             self.seed_budgets()
+            self.seed_customs_rates()
             ships = self.seed_shipments(corridors)
+            self.seed_checklists(ships)
         self.seed_history(vendors, ships)
         if options["with_tracks"]:
             self.seed_tracks(Path(options["with_tracks"]))
@@ -73,6 +79,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             f"seed_demo: users elena/marco/admin ({DEMO_PASSWORD}), {len(vendors)} vendors, "
             f"{len(corridors)} corridors, {len(ships)} shipments, "
+            f"{CustomsRate.objects.count()} customs rates, {ShipmentDocument.objects.count()} shipping docs, "
             f"{ExpenseDocument.objects.count()} expense documents"
         ))
 
@@ -128,6 +135,29 @@ class Command(BaseCommand):
         period = self.now.strftime("%Y-%m")
         for category, amount in demo_data.BUDGETS.items():
             Budget.objects.update_or_create(category=category, period=period, defaults={"amount": amount})
+
+    def seed_customs_rates(self):
+        for r in demo_data.CUSTOMS_RATES:
+            data = dict(r)
+            CustomsRate.objects.update_or_create(
+                hs_code=data.pop("hs_code"), origin_country=data.pop("origin_country"), defaults=data
+            )
+
+    def seed_checklists(self, ships: dict[str, Shipment]):
+        """One ShipmentDocument per required kind; VERIFIED unless it's a planted gap.
+        Existing rows are left alone (their status may have moved on)."""
+        for ref, shipment in ships.items():
+            tag = "".join(ch for ch in ref.upper() if ch.isalnum())[-6:]
+            for kind in required_kinds(shipment):
+                status = demo_data.SHIPPING_DOC_GAPS.get((ref, kind), ShipmentDocument.Status.VERIFIED)
+                prefix = "".join(word[0] for word in kind.split("_")).upper()
+                ShipmentDocument.objects.get_or_create(
+                    shipment=shipment, kind=kind,
+                    defaults={
+                        "status": status,
+                        "number": "" if status == ShipmentDocument.Status.MISSING else f"{prefix}-{tag}-01",
+                    },
+                )
 
     def seed_shipments(self, corridors) -> dict[str, Shipment]:
         ships = {}
@@ -190,18 +220,20 @@ class Command(BaseCommand):
     # ---------------------------------------------------------------- history
     def seed_history(self, vendors, ships):
         marco = get_user_model().objects.get(username="marco")
+        created = []
         for h in demo_data.HISTORY:
             vendor = vendors[h["vendor"]]
             if ExpenseDocument.objects.filter(vendor=vendor, number=h["number"]).exists():
                 continue
             shipment = ships[h["shipment"]]
-            date = (self.now + timedelta(days=h["days"])).date()
-            total = h["net"] + h["vat"]
+            number = str(h["number"])
+            date = (self.now + timedelta(days=int(h["days"]))).date()
+            total = Decimal(h["net"]) + Decimal(h["vat"])
             pdf = _history_pdf(vendor, shipment, h, date, total)
 
             with transaction.atomic():
                 doc = expenses.receive_document(
-                    pdf, filename=f"{h['number'].replace('/', '-')}.pdf",
+                    pdf, filename=f"{number.replace('/', '-')}.pdf",
                     actor_type="system", actor_name=SEED, shipment=shipment,
                 )
                 approvals.set_doc_status(doc, "PROCESSING", actor_type="system", actor_name=SEED)
@@ -217,7 +249,11 @@ class Command(BaseCommand):
                 approvals.set_doc_status(doc, "READY", actor_type="system", actor_name=SEED)
                 pa = approvals.request_payment(doc, requested_by=SEED)
                 approvals.decide_payment(pa.pk, marco, True, note="historical payment (seed)")
-        # TODO(A.5): export the approved history through build_export_batch so it ends up EXPORTED.
+            created.append(doc.pk)
+        if created:
+            # Paid history goes out through the real export, so it ends up EXPORTED with a
+            # batch. only_ids: never sweep up documents approved during a demo run.
+            export.build_export_batch(marco, only_ids=created)
 
 
 def _history_pdf(vendor, shipment, h, date, total) -> bytes:

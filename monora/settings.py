@@ -128,3 +128,17 @@ HOURLY_COST_EUR = float(env_str("HOURLY_COST_EUR", "40"))
 
 SAMPLE_DATA_DIR = BASE_DIR / "sample_data"
 OUTBOX_DIR = BASE_DIR / "outbox"  # "sent" weekly reports land here
+
+# The paying company: debtor in the SEPA file, bill-to on every invoice. FICTIONAL.
+DEMO_COMPANY = {
+    "name": "Monora Trading S.r.l.",
+    "vat_number": "IT12038475666",
+    "address": "Via Nizza 150, 10126 Torino (TO), IT",
+    "iban": "IT19H0306901000100000012345",  # checksum-valid, belongs to nobody
+}
+
+# Weekly report "sending": always written to OUTBOX_DIR; also emailed through
+# EMAIL_BACKEND (console by default = printed in the web container log).
+EMAIL_BACKEND = env_str("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+DEFAULT_FROM_EMAIL = env_str("DEFAULT_FROM_EMAIL", "autopilot@monora.example")
+REPORT_RECIPIENTS = [r for r in env_str("REPORT_RECIPIENTS", "finance@monora.example").split(",") if r]

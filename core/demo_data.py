@@ -185,3 +185,33 @@ HISTORY = [
     dict(vendor="lombarda", shipment="TRK GX-482-T", doc_type="freight_bill", category="FREIGHT",
          number="LT-2026-1187", days=-1, net=D("2350"), vat=D("517")),
 ]
+
+# --------------------------------------------------------------------------
+# Customs (A.4). SAMPLE tariff data, label it as such in the UI; the real
+# source is EU TARIC. Percentages. preferential_duty_pct applies only with a
+# VERIFIED certificate of origin when requires_certificate is set.
+# --------------------------------------------------------------------------
+CUSTOMS_RATES = [
+    dict(hs_code="7403.11", origin_country="*", duty_pct=D("0.000"), preferential_duty_pct=None,
+         requires_certificate=False, note="Sample: refined copper cathodes, MFN 0%."),
+    dict(hs_code="7403.11", origin_country="CL", duty_pct=D("0.000"), preferential_duty_pct=D("0.000"),
+         requires_certificate=True, note="Sample: EU-Chile agreement; proof of origin required for preference."),
+    dict(hs_code="1511.10", origin_country="*", duty_pct=D("3.800"), preferential_duty_pct=None,
+         requires_certificate=False, note="Sample: crude palm oil, MFN rate."),
+    dict(hs_code="1511.10", origin_country="ID", duty_pct=D("3.800"), preferential_duty_pct=D("0.000"),
+         requires_certificate=True,
+         note="Sample: assumes an EU-Indonesia preference at 0% with a certificate of origin; 3.8% without."),
+    # used by the HS_CODE_MISMATCH case: broker declares refined instead of crude palm oil
+    dict(hs_code="1511.90", origin_country="*", duty_pct=D("9.000"), preferential_duty_pct=None,
+         requires_certificate=False, note="Sample: refined palm oil (not crude), MFN rate."),
+    dict(hs_code="7108.12", origin_country="*", duty_pct=D("0.000"), preferential_duty_pct=None,
+         requires_certificate=False, note="Sample: unwrought gold, MFN 0%."),
+    dict(hs_code="2603.00", origin_country="*", duty_pct=D("0.000"), preferential_duty_pct=None,
+         requires_certificate=False, note="Sample: copper ores and concentrates, MFN 0%."),
+]
+
+# Shipping-document checklist: every required kind (core.checklists) is seeded
+# VERIFIED with a number, except these planted gaps.
+SHIPPING_DOC_GAPS = {
+    ("MV Sundara Bay", "certificate_of_origin"): "MISSING",  # -> MISSING_ORIGIN_CERT / MISSING_SHIPPING_DOC
+}

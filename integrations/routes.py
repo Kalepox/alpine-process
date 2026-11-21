@@ -121,12 +121,12 @@ class RoutesProvider(TrackingProvider):
         return RoadRoute(path=path, distance_km=r.get("distanceMeters", 0) / 1000,
                          duration_s=float(str(r.get("duration", "0s")).rstrip("s")), source="google")
 
-    def _route_for(self, shipment: Shipment) -> RoadRoute:
-        cached = self._routes.get(shipment.pk)
+    def _route_for(self, shipment_pk: int, origin: list[float], dest: list[float]) -> RoadRoute:
+        cached = self._routes.get(shipment_pk)
         if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
             return cached[1]
-        route = self.route(shipment.origin_latlon, shipment.dest_latlon)
-        self._routes[shipment.pk] = (time.monotonic(), route)
+        route = self.route(origin, dest)
+        self._routes[shipment_pk] = (time.monotonic(), route)
         return route
 
     # ------------------------------------------------------------------ fetch
@@ -135,9 +135,10 @@ class RoutesProvider(TrackingProvider):
         out = []
         shipments = Shipment.objects.filter(mode="ROAD", tracker_id__in=[t for t in tracker_ids if t])
         for shipment in shipments:
-            if not (shipment.origin_latlon and shipment.dest_latlon):
+            origin, dest = shipment.origin_latlon, shipment.dest_latlon
+            if not (origin and dest):
                 continue
-            route = self._route_for(shipment)
+            route = self._route_for(shipment.pk, origin, dest)
             latest = shipment.positions.order_by("-ts").first()
             if latest is None:
                 anchor, step_s = route.path[0], 0.0

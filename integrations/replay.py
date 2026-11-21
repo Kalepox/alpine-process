@@ -36,9 +36,8 @@ class ReplayProvider(TrackingProvider):
     def __init__(self, mode: str, speedup: float | None = None) -> None:
         super().__init__()
         self.mode = mode
-        if speedup is None:
-            speedup = settings.DEMO_REPLAY_SPEEDUP if mode in COMPRESSED_MODES else 1.0
-        self.speedup = speedup
+        default = settings.DEMO_REPLAY_SPEEDUP if mode in COMPRESSED_MODES else 1.0
+        self.speedup: float = float(speedup if speedup is not None else default)
 
     def _resolve(self, keys: list[str]) -> dict[str, Shipment]:
         pks = [int(k[len(KEY_PREFIX):]) for k in keys if k.startswith(KEY_PREFIX)]

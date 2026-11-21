@@ -5,10 +5,16 @@ Rules for everyone:
   * Only A edits this file and creates migrations.
   * AuditEvent is append-only: no update, no delete (enforced below).
 """
+from decimal import Decimal
+from typing import TYPE_CHECKING
+
 from django.conf import settings
 from django.db import models
 
-MONEY = {"max_digits": 14, "decimal_places": 2}
+if TYPE_CHECKING:
+    from django.db.models.manager import RelatedManager  # provided by django-types (requirements-dev.txt)
+
+MONEY_DIGITS, MONEY_PLACES = 14, 2
 
 
 # --------------------------------------------------------------------------
@@ -70,6 +76,9 @@ class Vendor(models.Model):
     kind = models.CharField(max_length=20, choices=Kind.choices, default=Kind.OTHER)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # for type checkers only (Django creates these at runtime)
+    documents: "RelatedManager[ExpenseDocument]"
+
     class Meta:
         ordering = ["name"]
 
@@ -96,9 +105,12 @@ class Corridor(models.Model):
     status_source = models.CharField(max_length=10, choices=Source.choices, blank=True)
     status_updated_at = models.DateTimeField(null=True, blank=True)
     war_risk_pct = models.DecimalField(
-        max_digits=6, decimal_places=3, default=0,
+        max_digits=6, decimal_places=3, default=Decimal("0"),
         help_text="Insurance surcharge, % of cargo value, applied when RESTRICTED (0.75 = 0.75%)",
     )
+
+    # for type checkers only (Django creates these at runtime)
+    shipments: "RelatedManager[Shipment]"
 
     class Meta:
         ordering = ["code"]
@@ -110,7 +122,7 @@ class Corridor(models.Model):
 class Budget(models.Model):
     category = models.CharField(max_length=12, choices=CostCategory.choices)
     period = models.CharField(max_length=7, help_text="YYYY-MM")
-    amount = models.DecimalField(**MONEY)
+    amount = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES)
 
     class Meta:
         ordering = ["-period", "category"]
@@ -160,7 +172,7 @@ class Shipment(models.Model):
     cargo = models.CharField(max_length=120)
     quantity = models.DecimalField(max_digits=14, decimal_places=3)
     unit = models.CharField(max_length=2, choices=Unit.choices, default=Unit.MT)
-    cargo_value = models.DecimalField(**MONEY)
+    cargo_value = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES)
     origin = models.CharField(max_length=120)
     destination = models.CharField(max_length=120)
     origin_latlon = models.JSONField(null=True, blank=True, help_text="[lat, lon]")
@@ -170,18 +182,30 @@ class Shipment(models.Model):
     eta_current = models.DateTimeField(null=True, blank=True)
     corridor = models.ForeignKey(Corridor, null=True, blank=True, on_delete=models.SET_NULL, related_name="shipments")
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.ON_TRACK)
-    demurrage_per_day = models.DecimalField(**MONEY, default=0)
+    demurrage_per_day = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES, default=Decimal("0"))
     deadline = models.DateField(null=True, blank=True)
     # customs
     hs_code = models.CharField(max_length=12, blank=True, help_text='"7403.11" copper cathodes, "1511.10" palm oil')
     origin_country = models.CharField(max_length=2, blank=True, help_text="ISO2")
     incoterm = models.CharField(max_length=3, choices=Incoterm.choices, blank=True)
-    freight_cost_for_customs = models.DecimalField(**MONEY, default=0)
-    insurance_cost_for_customs = models.DecimalField(**MONEY, default=0)
+    freight_cost_for_customs = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES, default=Decimal("0"))
+    insurance_cost_for_customs = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES, default=Decimal("0"))
     preferential_origin_claimed = models.BooleanField(default=False)
     customs_status = models.CharField(max_length=12, choices=CustomsStatus.choices, default=CustomsStatus.NOT_STARTED)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # for type checkers only (Django creates these at runtime)
+    corridor_id: int | None
+    documents: "RelatedManager[ShipmentDocument]"
+    positions: "RelatedManager[Position]"
+    alerts: "RelatedManager[Alert]"
+    route_options: "RelatedManager[RouteOption]"
+    preapprovals: "RelatedManager[PreApproval]"
+    cost_lines: "RelatedManager[CostLine]"
+    expense_documents: "RelatedManager[ExpenseDocument]"
+    issues: "RelatedManager[Issue]"
+    audit_events: "RelatedManager[AuditEvent]"
 
     class Meta:
         ordering = ["ref"]
@@ -216,11 +240,14 @@ class ShipmentDocument(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # for type checkers only (Django creates these at runtime)
+    shipment_id: int
+
     class Meta:
         ordering = ["shipment", "kind"]
 
     def __str__(self):
-        return f"{self.shipment} · {self.get_kind_display()} ({self.status})"
+        return f"{self.shipment} · {self.Kind(self.kind).label} ({self.status})"
 
 
 class CustomsRate(models.Model):
@@ -258,6 +285,9 @@ class Position(models.Model):
     ts = models.DateTimeField()
     source = models.CharField(max_length=10, choices=Source.choices)
 
+    # for type checkers only (Django creates these at runtime)
+    shipment_id: int
+
     class Meta:
         ordering = ["-ts"]
         indexes = [models.Index(fields=["shipment", "-ts"], name="position_shipment_ts")]
@@ -281,6 +311,9 @@ class Alert(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     resolved = models.BooleanField(default=False)
 
+    # for type checkers only (Django creates these at runtime)
+    shipment_id: int
+
     class Meta:
         ordering = ["-created_at"]
 
@@ -300,11 +333,16 @@ class RouteOption(models.Model):
     transit_days = models.PositiveIntegerField(default=0)
     delay_days = models.IntegerField(default=0)
     cost_breakdown = models.JSONField(default=dict, blank=True, help_text="{category: amount}")
-    total_extra_cost = models.DecimalField(**MONEY, default=0)
+    total_extra_cost = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES, default=Decimal("0"))
     rationale = models.TextField(blank=True)
     chosen = models.BooleanField(default=False)
     created_by = models.CharField(max_length=60, default="agent")
     created_at = models.DateTimeField(auto_now_add=True)
+
+    # for type checkers only (Django creates these at runtime)
+    shipment_id: int
+    corridor_id: int | None
+    preapprovals: "RelatedManager[PreApproval]"
 
     class Meta:
         ordering = ["shipment", "total_extra_cost"]
@@ -319,7 +357,7 @@ class PreApproval(models.Model):
         RouteOption, null=True, blank=True, on_delete=models.SET_NULL, related_name="preapprovals"
     )
     categories = models.JSONField(default=list, help_text='e.g. ["WAR_RISK", "FREIGHT"]')
-    amount_cap = models.DecimalField(**MONEY)
+    amount_cap = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES)
     reason = models.TextField(blank=True)
     status = models.CharField(max_length=8, choices=ApprovalStatus.choices, default=ApprovalStatus.PENDING)
     requested_by = models.CharField(max_length=60, default="agent")
@@ -329,6 +367,12 @@ class PreApproval(models.Model):
     decided_at = models.DateTimeField(null=True, blank=True)
     note = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    # for type checkers only (Django creates these at runtime)
+    shipment_id: int
+    route_option_id: int | None
+    decided_by_id: int | None
+    cost_lines: "RelatedManager[CostLine]"
 
     class Meta:
         ordering = ["-created_at"]
@@ -340,13 +384,17 @@ class PreApproval(models.Model):
 class CostLine(models.Model):
     shipment = models.ForeignKey(Shipment, on_delete=models.CASCADE, related_name="cost_lines")
     category = models.CharField(max_length=12, choices=CostCategory.choices)
-    quoted = models.DecimalField(**MONEY, default=0)
-    projected = models.DecimalField(**MONEY, default=0)
-    actual = models.DecimalField(**MONEY, null=True, blank=True)
+    quoted = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES, default=Decimal("0"))
+    projected = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES, default=Decimal("0"))
+    actual = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES, null=True, blank=True)
     preapproval = models.ForeignKey(
         PreApproval, null=True, blank=True, on_delete=models.SET_NULL, related_name="cost_lines"
     )
     note = models.TextField(blank=True)
+
+    # for type checkers only (Django creates these at runtime)
+    shipment_id: int
+    preapproval_id: int | None
 
     class Meta:
         ordering = ["shipment", "category"]
@@ -386,9 +434,9 @@ class ExpenseDocument(models.Model):
     number = models.CharField(max_length=80, blank=True)
     date = models.DateField(null=True, blank=True)
     category = models.CharField(max_length=12, choices=CostCategory.choices, blank=True)
-    net = models.DecimalField(**MONEY, null=True, blank=True)
-    vat = models.DecimalField(**MONEY, null=True, blank=True)
-    total = models.DecimalField(**MONEY, null=True, blank=True)
+    net = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES, null=True, blank=True)
+    vat = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES, null=True, blank=True)
+    total = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES, null=True, blank=True)
     currency = models.CharField(max_length=3, default="EUR")
     iban = models.CharField(max_length=34, blank=True)
     quantity = models.DecimalField(max_digits=14, decimal_places=3, null=True, blank=True)
@@ -397,6 +445,14 @@ class ExpenseDocument(models.Model):
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.RECEIVED, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # for type checkers only (Django creates these at runtime)
+    shipment_id: int | None
+    vendor_id: int | None
+    issues: "RelatedManager[Issue]"
+    pending_actions: "RelatedManager[PendingAction]"
+    export_batches: "RelatedManager[ExportBatch]"
+    audit_events: "RelatedManager[AuditEvent]"
 
     class Meta:
         ordering = ["-created_at"]
@@ -422,6 +478,10 @@ class WeeklyReport(models.Model):
     )
     sent_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    # for type checkers only (Django creates these at runtime)
+    approved_by_id: int | None
+    pending_actions: "RelatedManager[PendingAction]"
 
     class Meta:
         ordering = ["-period_start"]
@@ -474,6 +534,11 @@ class Issue(models.Model):
     resolved_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # for type checkers only (Django creates these at runtime)
+    document_id: int | None
+    shipment_id: int | None
+    resolved_by_id: int | None
+
     class Meta:
         ordering = ["resolved", "-created_at"]
         constraints = [
@@ -509,6 +574,11 @@ class PendingAction(models.Model):
     note = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # for type checkers only (Django creates these at runtime)
+    document_id: int | None
+    report_id: int | None
+    decided_by_id: int | None
+
     class Meta:
         ordering = ["-created_at"]
         permissions = [
@@ -528,7 +598,10 @@ class ExportBatch(models.Model):
     sepa_file = models.FileField(upload_to="exports/%Y/%m/")
     csv_file = models.FileField(upload_to="exports/%Y/%m/")
     documents = models.ManyToManyField(ExpenseDocument, related_name="export_batches")
-    total = models.DecimalField(**MONEY, default=0)
+    total = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES, default=Decimal("0"))
+
+    # for type checkers only (Django creates these at runtime)
+    created_by_id: int
 
     class Meta:
         ordering = ["-created_at"]
@@ -573,6 +646,11 @@ class AuditEvent(models.Model):
     detail = models.TextField(blank=True)
 
     objects = AuditEventQuerySet.as_manager()
+
+    # for type checkers only (Django creates these at runtime)
+    actor_user_id: int | None
+    shipment_id: int | None
+    document_id: int | None
 
     class Meta:
         ordering = ["-ts", "-id"]

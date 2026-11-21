@@ -57,7 +57,7 @@ class Command(BaseCommand):
             self.stdout.write("collectors stopped")
 
     async def _main(self, modes, *, watchdog: bool):
-        tasks = [asyncio.create_task(self._poller(mode)) for mode in modes]
+        tasks: list[asyncio.Task] = [asyncio.create_task(self._poller(mode)) for mode in modes]
         if watchdog:
             tasks.append(asyncio.create_task(self._watchdog()))
         sea_live = registry.live_provider("SEA")
