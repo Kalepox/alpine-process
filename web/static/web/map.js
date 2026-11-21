@@ -77,7 +77,7 @@
       });
     }
     // ---- multimodal legs (sea = solid cyan, truck = dashed amber) ----
-    const LEG = { SEA: '#3ec7e0', ROAD: '#f5c542' };
+    const LEG = { SEA: '#3ec7e0', ROAD: '#f5c542', AIR: '#a78bfa', RAIL: '#fb923c' };
     function legFeatures(legs) {
       return { type: 'FeatureCollection', features: legs.map((l) => ({ type: 'Feature', properties: { mode: l.mode, color: LEG[l.mode] || '#8f98aa' }, geometry: { type: 'LineString', coordinates: (l.mode === 'SEA' ? smooth(l.coords.map(ll), 6) : l.coords.map(ll)) } })) };
     }
@@ -94,6 +94,8 @@
       map.addLayer({ id: id + '-glow', type: 'line', source: id, filter: line, layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': 10, 'line-blur': 7, 'line-opacity': 0.25 } });
       map.addLayer({ id: id + '-sea', type: 'line', source: id, filter: ['all', line, ['==', ['get', 'mode'], 'SEA']], layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': 3.2 } });
       map.addLayer({ id: id + '-road', type: 'line', source: id, filter: ['all', line, ['==', ['get', 'mode'], 'ROAD']], layout: { 'line-cap': 'butt', 'line-join': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': 3.2, 'line-dasharray': [1.4, 1] } });
+      map.addLayer({ id: id + '-air', type: 'line', source: id, filter: ['all', line, ['==', ['get', 'mode'], 'AIR']], layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': 2.6, 'line-dasharray': [3, 2] } });
+      map.addLayer({ id: id + '-rail', type: 'line', source: id, filter: ['all', line, ['==', ['get', 'mode'], 'RAIL']], layout: { 'line-cap': 'butt', 'line-join': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-dasharray': [0.6, 1.2] } });
       map.addLayer({ id: id + '-pts', type: 'circle', source: id, filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 6, 'circle-color': ['match', ['get', 'kind'], 'port', LEG.SEA, LEG.ROAD], 'circle-stroke-width': 2.5, 'circle-stroke-color': isDark() ? '#090e1a' : '#ffffff' } });
       map.addLayer({ id: id + '-lbl', type: 'symbol', source: id, filter: ['==', ['geometry-type'], 'Point'], layout: { 'text-field': ['get', 'name'], 'text-size': 12, 'text-offset': [0, 1.3], 'text-anchor': 'top', 'text-font': styleFont() }, paint: { 'text-color': isDark() ? '#eceef3' : '#131a2a', 'text-halo-color': isDark() ? '#090e1a' : '#ffffff', 'text-halo-width': 1.5 } });
     }
