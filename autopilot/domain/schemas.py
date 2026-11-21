@@ -156,7 +156,7 @@ class RouteOptionDTO(BaseModel):
     days_p10: float
     days_p90: float
     delay_days: float = 0.0  # vs the current plan (replan only)
-    cost_breakdown: dict[str, Decimal] = Field(default_factory=dict)  # keys: core.models.CostCategory
+    cost_breakdown: dict[str, Decimal] = Field(default_factory=dict)  # CostCategory keys + "CARRYING" (inventory cost, not invoiced)
     landed_cost: Decimal
     co2_kg: float
     risk_score: Probability

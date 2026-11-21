@@ -55,7 +55,17 @@ The `CargoClass` enum and the `CARGO_PROFILES` table, seeded and labeled "sample
 | Compliance & cargo fit | borders, transfers, sanctioned flag, cargo soft mismatches | 0.10 |
 | CO2e | Σ t·km × mode factor × cargo uplift (sea≈10, rail≈25, road≈70, air≈600 g/t-km) | 0.05 |
 
-The presets are Best route, Fastest, Most reliable, Cheapest and Greenest. Each criterion is normalized min-max across the candidate set. Then: Pareto filter, diversity check (reject options with over 70% leg overlap), 3–5 options.
+The presets are Best route, Fastest, Most reliable, Cheapest and Greenest.
+
+As built (H3–5):
+- **Normalization is ratio-to-best.** Each criterion scores best ÷ this route, so 30× the cost scores 0.03, not just "last". Min-max normalization hid how big a gap was.
+- **Time is deadline-aware.**
+  - With a deadline (not Fastest, not urgent), time scores *deadline safety*: P(on time) and the P90 buffer.
+  - Being faster than needed is only worth its carrying cost, which landed cost already includes.
+  - Without a deadline, with the Fastest preset, or when urgency is high, it scores raw speed.
+- **Candidates are generated under several weightings:** the request's own (k=30) plus pure time, cost, CO2 and reliability (k=8 each). That way the flight or the slow-but-safe route is always considered. Deadline and shelf-life requests depended on this.
+- **Choosing the options:** Pareto front first, then diversity. A route is a duplicate if it uses the same modes through the same corridors and straits (e.g. Genoa vs La Spezia), or shares over 70% of its km with a chosen one. That leaves 3–5 options.
+- **Plan B:** each option with an at-risk corridor gets one, for its riskiest corridor. Plan B keeps the route up to the hub before that corridor, then re-solves without it.
 
 ## B2.5 Monitor: following devices and the road situation
 `autopilot/pipelines/monitor.py::monitor_routes(shipment_ids=None) -> list[int]` returns the ids of affected shipments. It runs once per tick. `autopilot/management/commands/monitor_routes.py` loops it with `--interval` (default 300 s live, 20 s in `DEMO_MODE=replay`). A adds a `monitor` service to docker-compose.

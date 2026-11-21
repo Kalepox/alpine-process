@@ -66,6 +66,8 @@ PASSAGE_CORRIDORS = {
     "malacca": "MALACCA",
     "south_africa": "CAPE",
 }
+# Passages with no tracked risk, still named in route labels so a detour is visible.
+PASSAGE_NAMES = {"chili": "Cape Horn", "sunda": "Sunda Strait"}
 # Alternative voyages computed per port pair when the default one uses these passages.
 SEA_VARIANTS: dict[str, list[str]] = {
     "avoid_red_sea": ["suez", "babalmandab"],

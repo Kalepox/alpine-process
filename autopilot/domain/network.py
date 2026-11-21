@@ -4,10 +4,14 @@ Graph shape (networkx DiGraph, so Yen's k-shortest-paths works):
 
     MILAN                hub node, one per location; a route starts and ends at a hub
     MILAN:ROAD           mode node, one per mode the location supports
+    GENOA:SEA:in         arrival node for SEA/AIR: a voyage or flight ends here and can
+                         only continue into the hub, so every voyage is direct (no port
+                         hopping) and a change of vessel pays as a transfer
     hub <-> mode node    "terminal" edges: loading/unloading cost + dwell.
                          A transfer (e.g. SEA -> ROAD at Genoa) passes the hub,
                          so it pays unload + load, which is the transshipment penalty.
-    A:SEA -> B:SEA       "move" edges with mode, km, days, cost, CO2, corridors, geometry
+    A:SEA -> B:SEA:in    "move" edges with mode, km, days, cost, CO2, corridors, geometry
+    A:ROAD -> B:ROAD     land moves chain through cities (a truck drives on) without a transfer
 
 Sea legs come from `searoute` (real lanes, which also says which straits a voyage
 passes). Where the default voyage uses Suez/Red Sea, Panama or Malacca, an
@@ -41,6 +45,7 @@ from .tables import (
     LOCATIONS,
     MODES,
     PASSAGE_CORRIDORS,
+    PASSAGE_NAMES,
     ROAD,
     SEA,
     SEA_ALWAYS_RESTRICTED,
@@ -50,6 +55,7 @@ from .tables import (
 )
 
 SEA_LEGS_PATH = Path(__file__).parent / "data" / "sea_legs.json"
+ARRIVAL_MODES = {SEA, AIR}  # point-to-point: no chaining through intermediate ports/airports
 
 
 class UnknownPlace(KeyError):
@@ -145,7 +151,11 @@ class TransportGraph:
                 terminal = dict(kind="terminal", mode=mode, km=0.0, days=p.terminal_hours / 24,
                                 cost_per_t=p.handling_eur_per_t, co2_kg_per_t=0.0, corridors=())
                 self.g.add_edge(code, node, **terminal)
-                self.g.add_edge(node, code, **terminal)
+                if mode in ARRIVAL_MODES:
+                    self.g.add_node(f"{node}:in", kind="arrival", loc=code, mode=mode)
+                    self.g.add_edge(f"{node}:in", code, **terminal)
+                else:
+                    self.g.add_edge(node, code, **terminal)
         for leg in sea_legs:
             self._add_sea_leg(leg)
         self._add_land_links()
@@ -154,14 +164,14 @@ class TransportGraph:
 
     # -- construction
     def _add_move(self, a: str, b: str, mode: str, km: float, corridors: tuple[str, ...], geometry: list,
-                  variant: str = "default", adr_tunnel_ban: bool = False) -> None:
+                  variant: str = "default", adr_tunnel_ban: bool = False, extra_via: tuple[str, ...] = ()) -> None:
         p = MODES[mode]
         attrs = dict(
             kind="move", mode=mode, km=km, days=km / p.km_per_day, cost_per_t=km * p.eur_per_tkm,
             co2_kg_per_t=km * p.co2_g_per_tkm / 1000, corridors=corridors, geometry=geometry,
-            adr_tunnel_ban=adr_tunnel_ban, from_loc=a, to_loc=b, label=_label(corridors),
+            adr_tunnel_ban=adr_tunnel_ban, from_loc=a, to_loc=b, via=_via(corridors) + extra_via,
         )
-        u, v = f"{a}:{mode}", f"{b}:{mode}"
+        u, v = f"{a}:{mode}", f"{b}:{mode}:in" if mode in ARRIVAL_MODES else f"{b}:{mode}"
         if variant == "default":
             self.g.add_edge(u, v, **attrs)
         else:
@@ -172,8 +182,9 @@ class TransportGraph:
 
     def _add_sea_leg(self, leg: dict) -> None:
         corridors = tuple(dict.fromkeys(PASSAGE_CORRIDORS[p] for p in leg["passages"] if p in PASSAGE_CORRIDORS))
-        self._add_move(leg["a"], leg["b"], SEA, leg["km"], corridors, leg["coords"], leg["variant"])
-        self._add_move(leg["b"], leg["a"], SEA, leg["km"], corridors, leg["coords"][::-1], leg["variant"])
+        extra = tuple(PASSAGE_NAMES[p] for p in leg["passages"] if p in PASSAGE_NAMES)
+        self._add_move(leg["a"], leg["b"], SEA, leg["km"], corridors, leg["coords"], leg["variant"], extra_via=extra)
+        self._add_move(leg["b"], leg["a"], SEA, leg["km"], corridors, leg["coords"][::-1], leg["variant"], extra_via=extra)
 
     def _add_land_links(self) -> None:
         for link in [*LAND_LINKS, CASPIAN_FERRY]:
@@ -236,8 +247,9 @@ class TransportGraph:
         return {c for _, _, cs in self.g.edges(data="corridors") for c in cs}
 
 
-def _label(corridors: tuple[str, ...]) -> str:
-    return " · ".join(CORRIDORS[c][0] for c in corridors)
+def _via(corridors: tuple[str, ...]) -> tuple[str, ...]:
+    """Display names of what a move passes, e.g. ("Suez Canal", "Bab-el-Mandeb / Red Sea")."""
+    return tuple(CORRIDORS[c][0] for c in corridors)
 
 
 @cache

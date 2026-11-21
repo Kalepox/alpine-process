@@ -40,9 +40,9 @@ def test_resolve_unknown(tg):
 
 
 def test_red_sea_voyage_has_a_cape_alternative(tg):
-    direct = tg.g.edges["BELAWAN:SEA", "MERSIN:SEA"]
+    direct = tg.g.edges["BELAWAN:SEA", "MERSIN:SEA:in"]
     assert {"SUEZ", "BAB_EL_MANDEB"} <= set(direct["corridors"])
-    cape = tg.g.edges["BELAWAN:SEA", "BELAWAN:SEA>MERSIN:SEA|avoid_red_sea"]
+    cape = tg.g.edges["BELAWAN:SEA", "BELAWAN:SEA>MERSIN:SEA:in|avoid_red_sea"]
     assert "CAPE" in cape["corridors"] and cape["km"] > direct["km"] * 2
 
 
@@ -70,7 +70,7 @@ def test_banned_mode_removes_its_edges(tg):
 
 
 def test_black_sea_voyage_is_tagged_bosphorus(tg):
-    assert "BOSPHORUS" in tg.g.edges["CONSTANTA:SEA", "ROTTERDAM:SEA"]["corridors"]
+    assert "BOSPHORUS" in tg.g.edges["CONSTANTA:SEA", "ROTTERDAM:SEA:in"]["corridors"]
 
 
 def test_transfer_passes_through_a_hub(tg):
@@ -78,6 +78,12 @@ def test_transfer_passes_through_a_hub(tg):
     path = nx.shortest_path(tg.g, "ANTOFAGASTA", "MILAN", weight="cost_per_t")
     hubs = [n for n in path[1:-1] if tg.g.nodes[n]["kind"] == "hub"]
     assert hubs and all("SEA" in LOCATIONS[h].modes for h in hubs)
+
+
+def test_no_port_hopping(tg):
+    """A sea arrival node only leads into its hub: changing vessel is a (paid) transfer."""
+    assert list(tg.g.successors("GENOA:SEA:in")) == ["GENOA"]
+    assert all(k == "move" for _, _, k in tg.g.in_edges("GENOA:SEA:in", data="kind") if k != "via")
 
 
 def test_great_circle_endpoints():
