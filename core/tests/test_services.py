@@ -291,6 +291,11 @@ def test_seed_demo_is_idempotent_and_books_history():
     freight = CostLine.objects.get(shipment__ref="MV Sundara Bay", category="FREIGHT")
     assert freight.actual == Decimal("247000.00")
     assert all(s.positions.exists() for s in Shipment.objects.all())
+    # both Red Sea ships start before Bab-el-Mandeb, so a closure really affects them
+    for ref in ("MT Aurelia Grace", "MV Sundara Bay"):
+        assert Shipment.objects.get(ref=ref).positions.get().lon > 43.4, ref
+    karoo = Shipment.objects.get(ref="MV Karoo Spirit")
+    assert karoo.eta_current - karoo.eta_planned == timedelta(days=3)
 
 
 # ------------------------------------------------------------------- admin

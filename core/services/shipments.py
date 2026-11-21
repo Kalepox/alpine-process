@@ -73,6 +73,26 @@ def record_position(
     return pos
 
 
+ETA_AUDIT_THRESHOLD_SECONDS = 1800  # don't flood the trail with minute-level ETA jitter
+
+
+def update_eta(shipment: Shipment, eta: datetime, *, source: str, actor_name: str) -> Shipment:
+    """Set Shipment.eta_current from a provider estimate. Audited when it moves >= 30 min."""
+    if shipment.status == Shipment.Status.ARRIVED:
+        return shipment
+    old = shipment.eta_current
+    if old == eta:
+        return shipment
+    shipment.eta_current = eta
+    shipment.save(update_fields=["eta_current", "updated_at"])
+    if old is None or abs((eta - old).total_seconds()) >= ETA_AUDIT_THRESHOLD_SECONDS:
+        audit.log(
+            "shipment.eta_updated", actor_type="system", actor_name=actor_name, shipment=shipment,
+            before={"eta_current": old}, after={"eta_current": eta}, detail=f"source: {source}",
+        )
+    return shipment
+
+
 def raise_alert(
     shipment: Shipment,
     code: str,

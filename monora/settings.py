@@ -114,6 +114,13 @@ GOOGLE_MAPS_API_KEY = env_str("GOOGLE_MAPS_API_KEY")
 DEMO_MODE = env_str("DEMO_MODE", "live")  # "live" | "replay"
 if DEMO_MODE not in {"live", "replay"}:
     raise ValueError(f"DEMO_MODE must be 'live' or 'replay', got {DEMO_MODE!r}")
+# Replay clock: 60 = one wall-clock minute moves a shipment one hour along its route.
+DEMO_REPLAY_SPEEDUP = float(env_str("DEMO_REPLAY_SPEEDUP", "60"))
+
+# Collectors (manage.py run_collectors)
+COLLECTOR_POLL_SECONDS = {"SEA": 30, "AIR": 60, "ROAD": 60, "RAIL": 60}  # OpenSky: keep AIR >= 60 (credits)
+WATCHDOG_SECONDS = 300
+TRACKS_FILE = BASE_DIR / "sample_data" / "tracks.json"
 
 # Savings counter inputs (placeholders until we cite a benchmark).
 MANUAL_MINUTES_PER_DOC = float(env_str("MANUAL_MINUTES_PER_DOC", "15"))

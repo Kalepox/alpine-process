@@ -9,7 +9,9 @@ like what the demo produces live.
 """
 import io
 from datetime import timedelta
+from pathlib import Path
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.core.management import call_command
@@ -48,6 +50,10 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--reset", action="store_true", help="Flush the database first.")
+        parser.add_argument(
+            "--with-tracks", nargs="?", const=str(settings.TRACKS_FILE), default=None, metavar="PATH",
+            help="Load cached real tracks (default sample_data/tracks.json, see snapshot_tracks).",
+        )
 
     def handle(self, *args, **options):
         if options["reset"]:
@@ -61,6 +67,8 @@ class Command(BaseCommand):
             self.seed_budgets()
             ships = self.seed_shipments(corridors)
         self.seed_history(vendors, ships)
+        if options["with_tracks"]:
+            self.seed_tracks(Path(options["with_tracks"]))
 
         self.stdout.write(self.style.SUCCESS(
             f"seed_demo: users elena/marco/admin ({DEMO_PASSWORD}), {len(vendors)} vendors, "
@@ -136,6 +144,7 @@ class Command(BaseCommand):
                 departed = self.now + timedelta(hours=data.pop("departed_hours"))
                 eta = self.now + timedelta(hours=data.pop("eta_hours"))
             deadline_days = data.pop("deadline", None)
+            slip = timedelta(days=data.pop("eta_slip_days", 0))
 
             shipment, created = Shipment.objects.get_or_create(
                 ref=ref,
@@ -145,7 +154,7 @@ class Command(BaseCommand):
                     "corridor": corridor,
                     "departed_at": departed,
                     "eta_planned": eta,
-                    "eta_current": eta,
+                    "eta_current": eta + slip,
                     "deadline": (self.now + timedelta(days=deadline_days)).date() if deadline_days else None,
                 },
             )
@@ -167,6 +176,16 @@ class Command(BaseCommand):
             if alert:
                 shipment_svc.raise_alert(shipment, alert["code"], alert["severity"], alert["message"], actor_name=SEED)
         return ships
+
+    # ----------------------------------------------------------------- tracks
+    def seed_tracks(self, path: Path):
+        from integrations.tracks import load_tracks
+
+        if not path.exists():
+            self.stdout.write(self.style.WARNING(f"--with-tracks: {path} not found, skipping (run snapshot_tracks)"))
+            return
+        counts = load_tracks(path, end_at=self.now)
+        self.stdout.write(f"tracks loaded: {counts or 'none matched'}")
 
     # ---------------------------------------------------------------- history
     def seed_history(self, vendors, ships):
