@@ -90,7 +90,7 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
-LOGIN_URL = "web:login"  # C's login page (/login/)
+LOGIN_URL = "web:login"  # /login/ (web.views.login_view, Django auth)
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "web:login"
 

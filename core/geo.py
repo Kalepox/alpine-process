@@ -76,6 +76,11 @@ def joined_path(paths: list[list[list[float]]]) -> list[list[float]]:
     return out
 
 
+def geometry_latlon(geometry) -> list[list[float]]:
+    """Any supported geometry (e.g. Corridor.geometry) as one [[lat, lon], ...] path."""
+    return joined_path(leg_paths(geometry)) if geometry else []
+
+
 def route_path(route) -> list[list[float]]:
     """Whole route as one [[lat, lon], ...] path."""
     return joined_path(leg_paths(route.geometry))

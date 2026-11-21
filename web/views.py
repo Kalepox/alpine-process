@@ -2,7 +2,9 @@
 Thin views (DEV_PLAN C.1): read via web.data, write via web.actions, render.
 No status fields are set here.
 """
+from django.conf import settings
 from django.contrib import messages
+from django.contrib.auth import authenticate, get_user_model, login, logout
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
@@ -10,8 +12,7 @@ from django.views.decorators.http import require_POST
 
 from . import actions, data, metrics
 from .actions import ActionError
-from .auth import current_user, login_required
-from .mock_data import USERS
+from .auth import DEMO_USERNAMES, current_user, demo_users, login_required
 
 
 def _run(request, fn, *a, ok=None, **kw):
@@ -33,34 +34,39 @@ def _back(request, fallback="web:overview"):
 # ---------------------------------------------------------------- auth
 def login_view(request):
     if request.method == "POST":
-        u = request.POST.get("username", "").strip().lower()
-        if u in USERS and request.POST.get("password") == "demo1234":
-            request.session["ui_user"] = u
+        user = authenticate(request, username=request.POST.get("username", "").strip().lower(),
+                            password=request.POST.get("password", ""))
+        if user is not None:
+            login(request, user)
             return redirect(request.GET.get("next") or "web:overview")
         messages.error(request, "Wrong username or password.")
-    return render(request, "web/login.html", {"users": USERS.values()})
+    return render(request, "web/login.html", {"users": demo_users()})
 
 
 def logout_view(request):
-    request.session.flush()
+    logout(request)
     return redirect("web:login")
 
 
 @require_POST
 def switch_user(request):
-    """Dev helper for the demo: hop between elena (ops) and marco (manager)."""
+    """Dev helper for the demo: hop between elena (ops) and marco (manager). DEBUG only."""
     u = request.POST.get("username")
-    if u in USERS:
-        request.session["ui_user"] = u
-        messages.info(request, f"Signed in as {USERS[u]['name']} ({USERS[u]['role']}).")
+    user = get_user_model().objects.filter(username=u).first() if settings.DEBUG and u in DEMO_USERNAMES else None
+    if user is not None:
+        login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+        me = current_user(request)
+        messages.info(request, f"Signed in as {me['name']} ({me['role']}).")
     return _back(request)
 
 
 @require_POST
 def demo_reset(request):
-    actions.reset_demo()
-    messages.success(request, "Demo data reset.")
-    return redirect("web:overview")
+    if not (current_user(request) or {}).get("is_manager"):
+        messages.error(request, "Only a manager can reset the demo.")
+        return _back(request)
+    actions.reset_demo()  # wipes the DB, sessions included: sign in again
+    return redirect("web:login")
 
 
 # ---------------------------------------------------------------- operate
@@ -186,8 +192,9 @@ def inbox_upload(request):
     if not files:
         messages.error(request, "Choose at least one PDF or image.")
     else:
-        ids = actions.upload_documents(files, current_user(request))
-        messages.success(request, f"{len(ids)} document{'s' if len(ids) != 1 else ''} uploaded. The autopilot is reading them.")
+        ids = _run(request, actions.upload_documents, files, current_user(request))
+        if ids:
+            messages.success(request, f"{len(ids)} document{'s' if len(ids) != 1 else ''} uploaded. The autopilot is reading them.")
     return redirect("web:inbox")
 
 
@@ -351,6 +358,7 @@ def plan_save(request):
     except routing.RoutingError as e:
         messages.error(request, str(e))
         return redirect("web:plan")
-    s = actions.add_planned_shipment(current_user(request), request.POST.get("name", "").strip(), request.POST.get("cargo", "").strip(), p)
-    messages.success(request, f"{s['ref']} added: {p['port']} then truck to {p['destination']}, ETA {p['eta']:%d %b}.")
-    return redirect("web:shipment", sid=s["id"])
+    s = _run(request, actions.add_planned_shipment, current_user(request), request.POST.get("name", "").strip(),
+             request.POST.get("cargo", "").strip(), p,
+             ok=lambda s: f"{s['ref']} planned via {p['port']}, then truck to {p['destination']}.")
+    return redirect("web:shipment", sid=s["id"]) if s else redirect("web:plan")

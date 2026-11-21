@@ -1,6 +1,6 @@
 from django.conf import settings
 
-from . import data, live_ais
+from . import data
 from .auth import current_user
 
 
@@ -12,5 +12,5 @@ def ui(request):
         "me": me,
         "demo_mode": getattr(settings, "DEMO_MODE", "live"),
         "counts": data.approval_counts() if me else {},
-        "ais": live_ais.status() if me else {},
+        "ais": data.ais_status() if me else {},
     }

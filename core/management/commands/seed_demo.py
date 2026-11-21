@@ -47,7 +47,7 @@ OPS_PERMS = [
 MANAGER_PERMS = OPS_PERMS + ["approve_route", "approve_spend", "approve_payment", "export_payments"]
 
 GROUPS = {"ops": OPS_PERMS, "manager": MANAGER_PERMS}
-USERS = [("elena", "ops", "Elena", "Ops"), ("marco", "manager", "Marco", "Manager")]
+USERS = [("elena", "ops", "Elena", "Ricci"), ("marco", "manager", "Marco", "Bianchi")]
 SPEED = {"SEA": 12.5, "AIR": 480.0, "ROAD": 70.0, "RAIL": 45.0}
 
 

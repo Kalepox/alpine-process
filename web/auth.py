@@ -1,20 +1,34 @@
 """
-Mock login for the standalone UI (no DB). After merge, replace current_user with
-request.user + perms (`core.approve_spend`, `core.approve_payment`, `core.export_payments`)
-and use django.contrib.auth views for login/logout.
+UI auth on top of Django's real users (seed_demo creates elena / marco / admin).
+Permissions are enforced by core.services; `is_manager` only drives what the UI shows.
 """
 from functools import wraps
 
+from django.contrib.auth import get_user_model
 from django.shortcuts import redirect
 
-from .mock_data import USERS
+from . import data
+
+DEMO_USERNAMES = ["elena", "marco"]
+
+
+def _as_dict(u):
+    role = data.role_of(u)
+    return dict(username=u.get_username(), name=u.get_full_name() or u.get_username(), role=role,
+                initials=data.initials(u), is_manager=role == "manager", obj=u)
 
 
 def current_user(request):
-    u = USERS.get(request.session.get("ui_user"))
-    if u:
-        return dict(u, is_manager=u["role"] == "manager")
-    return None
+    u = getattr(request, "user", None)
+    if u is None or not u.is_authenticated:
+        return None
+    return _as_dict(u)
+
+
+def demo_users():
+    """Quick sign-in buttons on the login page."""
+    User = get_user_model()
+    return [_as_dict(u) for u in User.objects.filter(username__in=DEMO_USERNAMES).order_by("username")]
 
 
 def login_required(view):
