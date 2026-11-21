@@ -1,0 +1,19 @@
+<div class="card p-5">
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <p class="card-title">Track a real flight</p>
+      <p class="mt-0.5 text-xs muted">
+        {% if s.live %}Following <span class="font-mono">{{ s.tracker_id }}</span> live from OpenSky (updates every few minutes).
+        {% elif s.tracker_id %}Bound to <span class="font-mono">{{ s.tracker_id }}</span>, no fresh position yet: showing the estimate along the route.
+        {% else %}Not bound to an aircraft: the position is estimated along the route.{% endif %}
+        Cargo and costs stay sample data.
+      </p>
+    </div>
+  </div>
+  <form class="mt-4 flex gap-2" hx-post="{% url 'web:shipment_flights' s.id %}" hx-target="#flight-results" hx-indicator="#flight-spin">
+    <input name="callsign" value="UAE9" class="input max-w-[12rem]" placeholder="Callsign prefix, e.g. UAE9" autocomplete="off">
+    <button class="btn btn-primary">Find flights</button>
+    <span id="flight-spin" class="htmx-indicator self-center text-xs muted">Asking OpenSky…</span>
+  </form>
+  <div id="flight-results" class="mt-4"></div>
+</div>

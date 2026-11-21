@@ -35,7 +35,7 @@
     <!-- Header -->
     <div class="flex flex-wrap items-start justify-between gap-4">
       <div class="min-w-0">
-        <div class="flex flex-wrap items-center gap-2">{% badge s.status %}<span class="chip">{% if s.mode == 'SEA' %}{% icon "ship" "size-3" %} Sea{% elif s.mode == 'AIR' %}{% icon "plane" "size-3" %} Air{% else %}{% icon "truck" "size-3" %} Road{% endif %}</span>{% if s.live %}<span class="chip !text-emerald-700 dark:!text-emerald-400" title="Position of a real vessel from aisstream.io. Cargo is sample data."><span class="size-1.5 rounded-full bg-emerald-500"></span>Live AIS · {{ s.live.name|default:"vessel" }} · MMSI {{ s.live.mmsi }}</span>{% else %}<span class="font-mono text-xs muted">{{ s.tracker_id }}</span>{% endif %}</div>
+        <div class="flex flex-wrap items-center gap-2">{% badge s.status %}<span class="chip">{% if s.mode == 'SEA' %}{% icon "ship" "size-3" %} Sea{% elif s.mode == 'AIR' %}{% icon "plane" "size-3" %} Air{% else %}{% icon "truck" "size-3" %} Road{% endif %}</span>{% if s.live and s.mode == 'AIR' %}<span class="chip !text-emerald-700 dark:!text-emerald-400" title="Position of a real aircraft from OpenSky. Cargo is sample data."><span class="size-1.5 rounded-full bg-emerald-500"></span>Live ADS-B · ICAO24 {{ s.tracker_id }}</span>{% elif s.live %}<span class="chip !text-emerald-700 dark:!text-emerald-400" title="Position of a real vessel from aisstream.io. Cargo is sample data."><span class="size-1.5 rounded-full bg-emerald-500"></span>Live AIS · {{ s.live.name|default:"vessel" }} · MMSI {{ s.live.mmsi }}</span>{% else %}<span class="font-mono text-xs muted">{{ s.tracker_id }}</span>{% endif %}</div>
         <h1 class="mt-2 text-2xl font-semibold tracking-tight">{{ s.ref }}</h1>
         <p class="mt-1 text-sm muted">{{ s.cargo }} · {{ s.quantity|num }} {{ s.unit }} · {{ s.cargo_value|compact_eur }} cargo value</p>
       </div>
@@ -93,6 +93,8 @@
         </dl>
       </div>
     </div>
+
+    {% if s.mode == 'AIR' %}{% include "web/partials/flight_picker.html" %}{% endif %}
 
     <!-- Cost ledger -->
     <div class="card">

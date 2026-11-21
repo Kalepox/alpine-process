@@ -1,0 +1,28 @@
+{% if error %}
+  <p class="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">{{ error }}</p>
+{% elif not flights %}
+  <p class="text-sm muted">No airborne flights{% if prefix %} matching “{{ prefix }}”{% endif %} near this route right now.</p>
+{% else %}
+  <table class="tbl">
+    <thead><tr><th>Flight</th><th>ICAO24</th><th>Position</th><th class="text-right">Alt</th><th class="text-right">Speed</th><th class="text-right">Heading</th><th></th></tr></thead>
+    <tbody>
+      {% for f in flights %}
+      <tr>
+        <td class="font-medium">{{ f.callsign|default:"–" }}</td>
+        <td class="font-mono text-xs muted">{{ f.icao24 }}</td>
+        <td class="tabular-nums text-xs">{{ f.lat|floatformat:2 }}, {{ f.lon|floatformat:2 }}</td>
+        <td class="text-right tabular-nums text-xs">{{ f.alt_m|floatformat:0 }} m</td>
+        <td class="text-right tabular-nums text-xs">{{ f.speed_kn|default:"–" }} kn</td>
+        <td class="text-right tabular-nums text-xs">{{ f.track|floatformat:0 }}°</td>
+        <td class="text-right">
+          <form method="post" action="{% url 'web:shipment_track' sid %}">{% csrf_token %}
+            <input type="hidden" name="flight" value="{{ f.icao24 }}">
+            <button class="btn btn-outline btn-sm">Follow</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="mt-2 text-xs muted">{{ flights|length }} flight{{ flights|length|pluralize }} from OpenSky (anonymous). Tip: <span class="font-mono">UAE9</span> = Emirates SkyCargo.</p>
+{% endif %}

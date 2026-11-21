@@ -252,3 +252,30 @@ def add_planned_shipment(user, name, cargo, plan):
     if user.get("is_manager"):
         _call(approvals.approve_route, option.pk, u, "planned from the map")
     return {"id": s.pk, "ref": Shipment.objects.get(pk=s.pk).ref}
+
+
+# ---------------------------------------------------------------- real flights -> integrations.flights (OpenSky)
+def find_flights(shipment_id, user, callsign_prefix=""):
+    from integrations.flights import FlightError, bbox_for
+    from integrations.flights import find_flights as _find
+
+    _u(user)
+    s = Shipment.objects.filter(pk=shipment_id).first()
+    try:
+        return _find(callsign_prefix, bbox_for(s))
+    except FlightError as exc:
+        raise ActionError(str(exc))
+
+
+def track_flight(shipment_id, user, flight):
+    from integrations.flights import FlightError, bind
+
+    u = _u(user)
+    s = Shipment.objects.filter(pk=shipment_id).first()
+    if s is None:
+        raise ActionError("Shipment not found.")
+    try:
+        f = bind(s, flight, actor_name=u.get_username(), actor_user=u)
+    except FlightError as exc:
+        raise ActionError(str(exc))
+    return {"id": s.pk, "ref": s.ref, "callsign": f["callsign"] or f["icao24"], "icao24": f["icao24"]}

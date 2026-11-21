@@ -362,3 +362,25 @@ def plan_save(request):
              request.POST.get("cargo", "").strip(), p,
              ok=lambda s: f"{s['ref']} planned via {p['port']}, then truck to {p['destination']}.")
     return redirect("web:shipment", sid=s["id"]) if s else redirect("web:plan")
+
+
+# ---------------------------------------------------------------- real flights (OpenSky)
+@login_required
+@require_POST
+def shipment_flights(request, sid):
+    """HTMX: live flights near this shipment's route, filtered by callsign prefix."""
+    prefix = request.POST.get("callsign", "").strip()
+    try:
+        flights = actions.find_flights(sid, current_user(request), prefix)
+        error = None
+    except ActionError as e:
+        flights, error = [], str(e)
+    return render(request, "web/partials/flight_list.html", {"flights": flights, "error": error, "sid": sid, "prefix": prefix})
+
+
+@login_required
+@require_POST
+def shipment_track(request, sid):
+    _run(request, actions.track_flight, sid, current_user(request), request.POST.get("flight", ""),
+         ok=lambda r: f"{r['ref']} now follows flight {r['callsign']} (live from OpenSky).")
+    return redirect("web:shipment", sid=sid)
