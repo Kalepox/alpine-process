@@ -15,7 +15,7 @@ class FakeLlm(BaseLlm):
     """Returns the scripted texts in order; records what it was asked."""
 
     model: str = "fake-gemini"
-    responses: list[str | dict] = []
+    responses: list[str | dict | list] = []
     requests: list = []
     grounding_urls: list[str] = []
 

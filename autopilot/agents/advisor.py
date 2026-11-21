@@ -28,7 +28,13 @@ Rules:
 - Use ONLY facts in the JSON. Every number you write must appear in the JSON exactly as given
   (e.g. "28.6 days", "18% closure risk"). Prefer words ("faster", "cheaper", "riskier") over numbers.
 - plan_b_required: true if the recommended option has a possible disruption with p_close_pct >= 15.
-- reroute_or_wait: "NA" (this is planning, not replanning).
+- mode "plan": reroute_or_wait is "NA".
+- mode "replan": the cargo is already moving and a corridor on its route is closed. Options are reroutes
+  (kind ROUTE) from its current position and possibly WAIT (hold until the corridor reopens, then continue).
+  delay_days is versus the approved plan. break_even_days on a reroute means: waiting beats this reroute
+  if the corridor reopens within that many days; compare it with wait_days (the estimated closure).
+  Never recommend an option with an infeasible_reason. Set reroute_or_wait to "WAIT" or "REROUTE" to match
+  the recommended option, and mention the break-even in the rationale.
 """
 
 route_advisor = LlmAgent(
@@ -41,9 +47,13 @@ route_advisor = LlmAgent(
 )
 
 
-def advisor_payload(request: RoutingRequest, options: list[RouteOptionDTO]) -> dict:
-    """What the advisor sees: rounded, human units, nothing it could misread."""
-    return {
+def advisor_payload(request: RoutingRequest, options: list[RouteOptionDTO], replan: dict | None = None) -> dict:
+    """What the advisor sees: rounded, human units, nothing it could misread.
+
+    replan: {"blocking": [corridor codes], "wait_days": float, "start": str} when re-planning in transit.
+    """
+    payload = {
+        "mode": "replan" if replan else "plan",
         "request": {
             "cargo": request.cargo.description, "cargo_class": request.cargo.cargo_class.value,
             "weight_t": request.cargo.weight_t, "deadline": str(request.deadline) if request.deadline else None,
@@ -56,7 +66,9 @@ def advisor_payload(request: RoutingRequest, options: list[RouteOptionDTO]) -> d
                 "landed_cost_eur": round(float(o.landed_cost)), "co2_t": round(o.co2_kg / 1000, 1),
                 "closure_risk_pct": round(o.risk_score * 100), "reliability_pct": o.score.get("reliability_pct"),
                 "deadline_miss_pct": round(o.score.get("p_miss_deadline", 0) * 100),
-                "transfers": len(o.legs) - 1,
+                "transfers": max(len(o.legs) - 1, 0), "kind": o.kind,
+                **({"delay_days": o.delay_days, "break_even_days": o.break_even_days,
+                    "infeasible_reason": o.infeasible_reason} if replan else {}),
                 "possible_disruptions": [
                     {"corridor": CORRIDORS[d.corridor][0], "p_close_pct": round(d.p_close * 100),
                      "delay_days": d.delay_days, "plan_b": d.contingency_label}
@@ -66,6 +78,12 @@ def advisor_payload(request: RoutingRequest, options: list[RouteOptionDTO]) -> d
             for o in options
         ],
     }
+    if replan:
+        payload["situation"] = {
+            "closed": [CORRIDORS[c][0] for c in replan.get("blocking", [])],
+            "wait_days": replan.get("wait_days"), "cargo_now": replan.get("start"),
+        }
+    return payload
 
 
 _KEY = re.compile(r"\bR\d+(?:-B)?\b")
@@ -89,6 +107,8 @@ def validate_verdict(raw: dict | None, options: list[RouteOptionDTO], payload: d
         return None, f"invalid verdict: {e}"
     if unknown := verdict.unknown_keys({o.key for o in options}):
         return None, f"unknown option keys {sorted(unknown)}"
+    if next(o for o in options if o.key == verdict.recommended_key).infeasible_reason:
+        return None, f"recommended an infeasible option ({verdict.recommended_key})"
     text = " ".join([verdict.rationale, *(t.text for t in verdict.tradeoffs)])
     if bad := ungrounded_numbers(text, payload):
         return None, f"numbers not in the solver output: {sorted(bad)}"
@@ -100,6 +120,10 @@ def fallback_verdict(options: list[RouteOptionDTO]) -> AdvisorVerdict:
     best = options[0]
     rationale = (f"{best.key} has the highest score for this request's priorities: about {best.transit_days} days "
                  f"door to door ({best.days_p10}-{best.days_p90}), landed cost EUR {best.landed_cost}.")
+    if best.kind == "WAIT" and best.break_even_days is not None:
+        rationale += f" Waiting beats the best reroute if the corridor reopens within {best.break_even_days} days."
+    elif best.break_even_days is not None:
+        rationale += f" Waiting would only be better if the corridor reopened within {best.break_even_days} days."
     tradeoffs = []
     for o in options[1:]:
         faster = "faster" if o.transit_days < best.transit_days else "slower"
@@ -107,15 +131,21 @@ def fallback_verdict(options: list[RouteOptionDTO]) -> AdvisorVerdict:
         riskier = "riskier" if o.risk_score > best.risk_score else "less or equally exposed to closures"
         tradeoffs.append(Tradeoff(option_key=o.key, text=f"{faster}, {cheaper} and {riskier} than {best.key}."))
     return AdvisorVerdict(recommended_key=best.key, rationale=rationale, tradeoffs=tradeoffs,
-                          plan_b_required=needs_plan_b(best), reroute_or_wait="NA")
+                          plan_b_required=needs_plan_b(best))
 
 
 def needs_plan_b(option: RouteOptionDTO) -> bool:
     return any(d.p_close >= PLAN_B_THRESHOLD for d in option.possible_disruptions)
 
 
-def apply_verdict(options: list[RouteOptionDTO], verdict: AdvisorVerdict) -> None:
-    """Recommended flag + rationale text onto the options (numbers stay the solver's)."""
+def apply_verdict(options: list[RouteOptionDTO], verdict: AdvisorVerdict, *, replan: bool = False) -> None:
+    """Recommended flag + rationale text onto the options (numbers stay the solver's).
+
+    reroute_or_wait is set by code from the recommended option's kind, whatever the model said.
+    """
+    best = next(o for o in options if o.key == verdict.recommended_key)
+    verdict.reroute_or_wait = ("WAIT" if best.kind == "WAIT" else "REROUTE") if replan else "NA"
+    verdict.plan_b_required = verdict.plan_b_required or needs_plan_b(best)
     notes = {t.option_key: t.text for t in verdict.tradeoffs}
     for o in options:
         o.recommended = o.key == verdict.recommended_key

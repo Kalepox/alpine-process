@@ -108,6 +108,22 @@ class SourceRef(BaseModel):
     url: str
 
 
+class RiskSignal(BaseModel):
+    """What risk_scout's structurer outputs per corridor: a classification, not a probability.
+
+    Code maps the level to probabilities (risk.py LEVELS). Numbers only when the news states them.
+    """
+
+    corridor: str = Field(description="Corridor code exactly as listed, e.g. 'BAB_EL_MANDEB'")
+    status: CorridorStatus = Field(description="CLOSED only if traffic is actually stopped now")
+    level: Literal["LOW", "ELEVATED", "HIGH", "SEVERE"] = Field(
+        description="LOW: normal; ELEVATED: tensions/incidents, traffic flows; HIGH: attacks/strikes/partial "
+                    "stoppages, closure plausible within 30 days; SEVERE: closure imminent or under way")
+    reopening_estimate_days: int | None = Field(None, description="only if a source states an estimate")
+    war_risk_pct: float | None = Field(None, description="war-risk insurance premium in % of cargo value, only if quoted")
+    reason: str = Field("", description="one sentence, with the date of the latest event")
+
+
 class RiskAssessment(BaseModel):
     """risk_scout's structured output, one per corridor. Validated, then applied by code."""
 

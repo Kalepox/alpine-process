@@ -16,8 +16,10 @@ from dataclasses import asdict, dataclass
 from itertools import product
 from typing import Iterable
 
-from .schemas import MAX_DISRUPTION_DAYS, RiskAssessment
+from .schemas import MAX_DISRUPTION_DAYS, RiskAssessment, RiskSignal, SourceRef
 
+# risk_scout classifies, code quantifies: level -> (risk_score, p_close_30d). Sample calibration.
+LEVELS = {"LOW": (0.10, 0.02), "ELEVATED": (0.30, 0.08), "HIGH": (0.60, 0.25), "SEVERE": (0.85, 0.50)}
 DEFAULT_DISRUPTION_DAYS = 10  # when a corridor may close but nobody estimated for how long
 MAX_EVENTS = 10               # exact enumeration is 2^n; keep the n most likely closures
 
@@ -36,6 +38,21 @@ class CorridorRisk:
         return float(self.expected_duration_days or DEFAULT_DISRUPTION_DAYS)
 
 
+def assess(signal: RiskSignal, sources: list[SourceRef]) -> RiskAssessment:
+    """risk_scout's classification + its search sources -> numbers, by code."""
+    risk_score, p_close = (1.0, 1.0) if signal.status == "CLOSED" else LEVELS[signal.level]
+    return RiskAssessment(
+        corridor=signal.corridor, status=signal.status, risk_score=risk_score, p_close_30d=p_close,
+        expected_duration_days=signal.reopening_estimate_days, war_risk_pct=signal.war_risk_pct or 0.0,
+        reason=signal.reason, sources=sources,
+    )
+
+
+def effective_status(a: RiskAssessment) -> str:
+    """An unsourced closure is only a restriction: Gemini never closes a corridor on its own."""
+    return "RESTRICTED" if a.status == "CLOSED" and not a.verified else a.status
+
+
 class RiskOverlay:
     def __init__(self, risks: Iterable[CorridorRisk] = ()):
         self._risks = {r.code: r for r in risks}
@@ -45,9 +62,7 @@ class RiskOverlay:
     def from_assessments(cls, assessments: Iterable[RiskAssessment]) -> RiskOverlay:
         risks = []
         for a in assessments:
-            status = a.status
-            if status == "CLOSED" and not a.verified:
-                status = "RESTRICTED"  # unverified claims inform, they don't close
+            status = effective_status(a)
             risks.append(CorridorRisk(
                 code=a.corridor, status=status, p_close_30d=1.0 if status == "CLOSED" else a.p_close_30d,
                 expected_duration_days=a.expected_duration_days, war_risk_pct=a.war_risk_pct, verified=a.verified,
@@ -76,8 +91,13 @@ class RiskOverlay:
     def with_status(self, code: str, status: str, duration_days: int | None = None) -> RiskOverlay:
         """Copy with one corridor changed (simulate_disruption, contingency planning)."""
         old = self.get(code)
-        new = CorridorRisk(code, status, 1.0 if status == "CLOSED" else old.p_close_30d,
-                           duration_days or old.expected_duration_days, old.war_risk_pct, True)
+        if status == "CLOSED":
+            p = 1.0
+        elif old.status == "CLOSED":
+            p = 0.0  # reopened: the closure is over (used for "wait, then continue")
+        else:
+            p = old.p_close_30d
+        new = CorridorRisk(code, status, p, duration_days or old.expected_duration_days, old.war_risk_pct, True)
         return RiskOverlay([*(r for c, r in self._risks.items() if c != code), new])
 
     # -- queries

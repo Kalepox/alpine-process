@@ -44,6 +44,7 @@ from .tables import (
     LAND_LINKS,
     LOCATIONS,
     MODES,
+    Location,
     PASSAGE_CORRIDORS,
     PASSAGE_NAMES,
     ROAD,
@@ -55,6 +56,7 @@ from .tables import (
 )
 
 SEA_LEGS_PATH = Path(__file__).parent / "data" / "sea_legs.json"
+POSITION = "CURRENT_POSITION"  # pseudo-location of a ship being re-planned at sea
 ARRIVAL_MODES = {SEA, AIR}  # point-to-point: no chaining through intermediate ports/airports
 
 
@@ -101,19 +103,32 @@ def build_sea_legs() -> list[dict]:
     legs = []
     for a, b in combinations(ports, 2):
         la, lb = LOCATIONS[a], LOCATIONS[b]
-        if haversine_km(la.lat, la.lon, lb.lat, lb.lon) < SEA_MIN_KM:
-            continue
-        default = _voyage(sr, la, lb, [])
-        if default is None:
-            continue
-        legs.append({"a": a, "b": b, "variant": "default", **default})
-        for variant, avoid in SEA_VARIANTS.items():
-            if not set(avoid) & set(default["passages"]):
-                continue
+        if haversine_km(la.lat, la.lon, lb.lat, lb.lon) >= SEA_MIN_KM:
+            legs += [{"a": a, "b": b, **v} for v in _voyages(sr, la, lb)]
+    return legs
+
+
+def voyages_from(lat: float, lon: float) -> list[dict]:
+    """Live: voyages from a ship's current position to every port (+ alternatives). ~0.3 s."""
+    import searoute as sr
+
+    here = Location("Current position", lat, lon, "", (SEA,))
+    ports = sorted(code for code, loc in LOCATIONS.items() if SEA in loc.modes and code not in CASPIAN_PORTS)
+    return [{"a": POSITION, "b": b, **v} for b in ports for v in _voyages(sr, here, LOCATIONS[b])]
+
+
+def _voyages(sr, la, lb) -> list[dict]:
+    """The default voyage plus one alternative per avoidable risky passage it uses."""
+    default = _voyage(sr, la, lb, [])
+    if default is None:
+        return []
+    out = [{"variant": "default", **default}]
+    for variant, avoid in SEA_VARIANTS.items():
+        if set(avoid) & set(default["passages"]):
             alt = _voyage(sr, la, lb, avoid)
             if alt and not set(avoid) & set(alt["passages"]):
-                legs.append({"a": a, "b": b, "variant": variant, **alt})
-    return legs
+                out.append({"variant": variant, **alt})
+    return out
 
 
 def _voyage(sr, la, lb, avoid: list[str]) -> dict | None:
@@ -135,7 +150,8 @@ def _voyage(sr, la, lb, avoid: list[str]) -> dict | None:
         pt = [round(lon, 2), round(lat, 2)]
         if not coords or coords[-1] != pt:
             coords.append(pt)
-    return {"km": round(f["properties"]["length"], 1), "passages": f["properties"].get("traversed_passages", []), "coords": coords}
+    passages = sorted(f["properties"].get("traversed_passages") or [])  # searoute's order varies run to run
+    return {"km": round(f["properties"]["length"], 1), "passages": passages, "coords": coords}
 
 
 # ---------------------------------------------------------------- the graph
@@ -164,7 +180,9 @@ class TransportGraph:
 
     # -- construction
     def _add_move(self, a: str, b: str, mode: str, km: float, corridors: tuple[str, ...], geometry: list,
-                  variant: str = "default", adr_tunnel_ban: bool = False, extra_via: tuple[str, ...] = ()) -> None:
+                  variant: str = "default", adr_tunnel_ban: bool = False, extra_via: tuple[str, ...] = (),
+                  g: nx.DiGraph | None = None) -> None:
+        g = self.g if g is None else g
         p = MODES[mode]
         attrs = dict(
             kind="move", mode=mode, km=km, days=km / p.km_per_day, cost_per_t=km * p.eur_per_tkm,
@@ -173,18 +191,20 @@ class TransportGraph:
         )
         u, v = f"{a}:{mode}", f"{b}:{mode}:in" if mode in ARRIVAL_MODES else f"{b}:{mode}"
         if variant == "default":
-            self.g.add_edge(u, v, **attrs)
+            g.add_edge(u, v, **attrs)
         else:
             via = f"{u}>{v}|{variant}"
-            self.g.add_node(via, kind="via", loc=None)
-            self.g.add_edge(u, via, **attrs)
-            self.g.add_edge(via, v, kind="via", mode=mode, km=0.0, days=0.0, cost_per_t=0.0, co2_kg_per_t=0.0, corridors=())
+            g.add_node(via, kind="via", loc=None)
+            g.add_edge(u, via, **attrs)
+            g.add_edge(via, v, kind="via", mode=mode, km=0.0, days=0.0, cost_per_t=0.0, co2_kg_per_t=0.0, corridors=())
 
-    def _add_sea_leg(self, leg: dict) -> None:
-        corridors = tuple(dict.fromkeys(PASSAGE_CORRIDORS[p] for p in leg["passages"] if p in PASSAGE_CORRIDORS))
+    def _add_sea_leg(self, leg: dict, g: nx.DiGraph | None = None, both_ways: bool = True) -> None:
+        corridors = _sea_corridors(leg)
         extra = tuple(PASSAGE_NAMES[p] for p in leg["passages"] if p in PASSAGE_NAMES)
-        self._add_move(leg["a"], leg["b"], SEA, leg["km"], corridors, leg["coords"], leg["variant"], extra_via=extra)
-        self._add_move(leg["b"], leg["a"], SEA, leg["km"], corridors, leg["coords"][::-1], leg["variant"], extra_via=extra)
+        self._add_move(leg["a"], leg["b"], SEA, leg["km"], corridors, leg["coords"], leg["variant"], extra_via=extra, g=g)
+        if both_ways:
+            self._add_move(leg["b"], leg["a"], SEA, leg["km"], corridors, leg["coords"][::-1], leg["variant"],
+                           extra_via=extra, g=g)
 
     def _add_land_links(self) -> None:
         for link in [*LAND_LINKS, CASPIAN_FERRY]:
@@ -226,25 +246,43 @@ class TransportGraph:
         raise UnknownPlace(place)
 
     def view(self, *, banned_modes=frozenset(), avoid_corridors=frozenset(), adr_tunnels_banned: bool = False,
-             closed_corridors=frozenset()) -> nx.DiGraph:
+             closed_corridors=frozenset(), base: nx.DiGraph | None = None) -> nx.DiGraph:
         """Read-only filtered view: what a given cargo/request may use.
 
         closed_corridors comes from the RiskOverlay (CLOSED status); avoid_corridors from the request.
+        base: a graph extended with a live start node (start_at_sea); default the network itself.
         """
+        g = self.g if base is None else base
         blocked = set(avoid_corridors) | set(closed_corridors)
 
         def keep(u: str, v: str) -> bool:
-            e = self.g.edges[u, v]
+            e = g.edges[u, v]
             if e["mode"] in banned_modes:
                 return False
             if blocked.intersection(e["corridors"]):
                 return False
             return not (adr_tunnels_banned and e.get("adr_tunnel_ban"))
 
-        return nx.subgraph_view(self.g, filter_edge=keep)
+        return nx.subgraph_view(g, filter_edge=keep)
+
+    def start_at_sea(self, lat: float, lon: float) -> tuple[nx.DiGraph, str]:
+        """Copy of the network plus a CURRENT_POSITION:SEA node with live voyages to every port.
+
+        Filter it with view(base=...) like the network itself.
+        """
+        g = nx.DiGraph(self.g)
+        node = f"{POSITION}:{SEA}"
+        g.add_node(node, kind="mode", loc=POSITION, mode=SEA)
+        for leg in voyages_from(lat, lon):
+            self._add_sea_leg(leg, g=g, both_ways=False)
+        return g, node
 
     def corridors_in_use(self) -> set[str]:
         return {c for _, _, cs in self.g.edges(data="corridors") for c in cs}
+
+
+def _sea_corridors(leg: dict) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(PASSAGE_CORRIDORS[p] for p in leg["passages"] if p in PASSAGE_CORRIDORS))
 
 
 def _via(corridors: tuple[str, ...]) -> tuple[str, ...]:

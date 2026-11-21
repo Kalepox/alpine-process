@@ -21,7 +21,6 @@ from autopilot.agents.advisor import (
     advisor_payload,
     apply_verdict,
     fallback_verdict,
-    needs_plan_b,
     route_advisor,
     validate_verdict,
 )
@@ -63,14 +62,17 @@ def parse_request(data: dict, *, run, today: dt.date) -> RoutingRequest:
     message = f"TODAY: {today.isoformat()}\nORDER: {text}\nFORM: {json.dumps(form, default=str)}"
     raw = run_agent_sync(intent_agent, message, run=run)
     request = RoutingRequest.model_validate({**(raw or {}), **form})
+    audit.log("intent.parsed", actor_type="agent", actor_name="intent_agent", run=run,
+              input={"text": text, "form": form}, output=jsonable(request))
     if request.cargo.value_eur == 0:
         audit.log("intent.missing_value", actor_type="agent", actor_name="intent_agent", run=run,
                   detail="Cargo value not stated: insurance and carrying cost are computed as 0.")
     return request
 
 
-def advise(request: RoutingRequest, options: list[RouteOptionDTO], *, run) -> AdvisorVerdict:
-    payload = advisor_payload(request, options)
+def advise(request: RoutingRequest, options: list[RouteOptionDTO], *, run, replan: dict | None = None) -> AdvisorVerdict:
+    """route_advisor (validated) or the deterministic fallback; applies the verdict to the options."""
+    payload = advisor_payload(request, options, replan)
     verdict, reason = None, "Gemini not configured"
     if gemini_available():
         try:
@@ -81,8 +83,7 @@ def advise(request: RoutingRequest, options: list[RouteOptionDTO], *, run) -> Ad
     source = "route_advisor"
     if verdict is None:
         verdict, source = fallback_verdict(options), "fallback"
-    verdict.plan_b_required = verdict.plan_b_required or needs_plan_b(
-        next(o for o in options if o.key == verdict.recommended_key))
+    apply_verdict(options, verdict, replan=replan is not None)
     audit.log("advisor.verdict", actor_type="agent", actor_name="route_advisor", run=run,
               input=payload, output=jsonable(verdict),
               detail=f"source={source}" + (f"; fallback reason: {reason}" if source == "fallback" else ""))
@@ -96,7 +97,6 @@ def plan_request(data: dict, *, run, overlay: RiskOverlay, today: dt.date, solve
               input=jsonable(request), output={**result.meta, "options": [o.label for o in result.options]},
               meta={"tool": "RouteSolver.plan"})
     verdict = advise(request, result.options, run=run)
-    apply_verdict(result.options, verdict)
     return PlanOutcome(request, result.options, result.contingencies, verdict)
 
 
@@ -116,6 +116,9 @@ def plan_routes(shipment_id: int, user_id: int) -> list[int]:
     try:
         outcome = plan_request(shipment.request, run=run, overlay=RiskOverlay.from_rows(Corridor.objects.all()),
                                today=timezone.localdate())
+        if shipment.request.get("text"):  # keep the parsed request: replan must not re-interpret free text
+            shipments.update_shipment_request(shipment, {**jsonable(outcome.request), "text": shipment.request["text"]},
+                                              actor_name="intent_agent", run=run)
         saved = shipments.save_route_options(shipment, outcome.options + outcome.contingencies,
                                              run=run, actor_name="route_advisor")
     except Exception as e:

@@ -1,4 +1,6 @@
-"""RouteSolver.plan: request + risk -> 3-5 diverse, scored route options (PLAN_B §B2.4). Owned by B.
+"""RouteSolver: request + risk -> 3-5 diverse, scored route options (PLAN_B §B2.4, §B2.6). Owned by B.
+
+plan()   at booking time, from the origin:
 
     1. filtered graph view (cargo + request constraints, CLOSED corridors removed)
     2. Yen k-shortest simple paths under several scalarized weights: the request's own plus
@@ -9,24 +11,27 @@
     5. score -> Pareto front first -> diversity (<= 70% shared km) -> 3-5 options
     6. per option: possible disruptions + a contingency route for its riskiest corridor
 
+replan() during transit, from where the cargo is now (a ship at sea gets live voyages from its
+position to every port), same steps 1-5, plus a WAIT option: hold until the closed corridor
+reopens, then continue; each reroute gets a break-even ("waiting wins if it reopens within N days").
+
 Everything here is deterministic: same graph version + overlay hash + request = same options.
-Replan (from a live position, with WAIT) is added in H7-10.
 """
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import ROUND_HALF_UP, Decimal
 from itertools import islice
 
 import networkx as nx
 
 from .cargo import CargoProfile, EffectiveConstraints, effective_constraints, profile_for
-from .network import TransportGraph, default_graph
+from .network import POSITION, TransportGraph, default_graph
 from .risk import RiskOverlay, quantile
 from .schemas import Leg, PossibleDisruption, Preset, RouteOptionDTO, RoutingRequest
 from .scoring import RouteMetrics, RouteScorer, pareto_front, weights_for
-from .tables import CARRYING_COST_PCT_YEAR, CORRIDORS, EU_CUSTOMS, LOCATIONS, MODES, ROAD, SANCTIONED_COUNTRIES
+from .tables import AIR, CARRYING_COST_PCT_YEAR, CORRIDORS, EU_CUSTOMS, LOCATIONS, MODES, ROAD, SANCTIONED_COUNTRIES, SEA
 
 MIN_P_SHOWN = 0.05  # corridors less likely than this to close are not listed as possible disruptions
 
@@ -60,6 +65,9 @@ class _Candidate:
     metrics: RouteMetrics
     cost_breakdown: dict[str, Decimal]
     rejected: str = ""  # why it is infeasible, "" if fine
+    kind: str = "ROUTE"  # "ROUTE" | "WAIT"
+    wait_days: float = 0.0
+    wait_for: tuple[str, ...] = ()  # corridors a WAIT option waits for
 
 
 @dataclass
@@ -83,54 +91,103 @@ class RouteSolver:
     # ------------------------------------------------------------ public
     def plan(self, request: RoutingRequest, overlay: RiskOverlay, *, today: dt.date | None = None) -> PlanResult:
         ctx = self._context(request, overlay, today or dt.date.today())
+        pool, stats = self._pool(ctx)
+        if not pool:
+            raise NoRouteFound(f"{request.origin} -> {request.destination}: no feasible route ({stats})")
+        scorer = self._scorer(ctx)
+        options, contingencies = self._rank(self._select(pool, scorer), None, scorer, ctx, with_plan_b=True)
+        return PlanResult(options, contingencies, self._meta(ctx, stats, options))
+
+    def replan(self, request: RoutingRequest, remaining_legs: list[Leg], overlay: RiskOverlay, *,
+               position: tuple[float, float] | None = None, today: dt.date | None = None, elapsed_days: float = 0.0,
+               planned_remaining_days: float | None = None, demurrage_per_day: float = 0.0) -> PlanResult:
+        """Options from the cargo's current position: reroutes + WAIT (if a CLOSED corridor blocks the plan).
+
+        remaining_legs: the approved route from the current leg on. position: (lat, lon) of the last fix.
+        planned_remaining_days: days to destination under the approved plan (for delay_days).
+        """
+        ctx = self._context(request, overlay, today or dt.date.today())
+        if ctx.constraints.max_transit_days is not None:  # shelf life already partly used
+            ctx.constraints = replace(ctx.constraints, max_transit_days=max(0.0, ctx.constraints.max_transit_days - elapsed_days))
+        base, ctx.src, start = self._start(remaining_legs[0], position)
+        ctx.view = self._view(ctx, overlay, base)
+        pool, stats = self._pool(ctx)
+        blocking = tuple(sorted({c for leg in remaining_legs for c in leg.corridors if c in overlay.closed}))
+        cont = self._continuation(ctx, base, blocking)  # (path, ctx) of "carry on as if nothing were closed"
+        baseline = self._build(*cont) if cont else None
+        wait = self._wait(*cont, ctx, blocking, demurrage_per_day) if blocking and cont else None
+        if not pool and not (wait and not wait.rejected):
+            raise NoRouteFound(f"replan {request.origin} -> {request.destination} from {start}: no reroute and no wait ({stats})")
+        scorer = self._scorer(ctx)
+        options, _ = self._rank(self._select(pool, scorer) if pool else [], wait, scorer, ctx, with_plan_b=False)
+        if planned_remaining_days is not None:
+            for o in options:
+                o.delay_days = round(o.transit_days - planned_remaining_days, 1)
+        if wait:
+            self._break_even(options, wait, ctx, demurrage_per_day)
+        meta = {**self._meta(ctx, stats, options), "start": start, "blocking": list(blocking),
+                "elapsed_days": elapsed_days, "wait_days": wait.wait_days if wait else None,
+                "baseline_cost": str(_eur(baseline.metrics.landed_cost)) if baseline else None,
+                "baseline_breakdown": {k: str(v) for k, v in baseline.cost_breakdown.items()} if baseline else {}}
+        return PlanResult(options, [], meta)
+
+    # ------------------------------------------------------------ setup
+    def _context(self, request: RoutingRequest, overlay: RiskOverlay, today: dt.date) -> _Ctx:
+        c = effective_constraints(request)
+        slack = (request.deadline - today).days if request.deadline else None
+        ctx = _Ctx(request, overlay, self.graph.resolve(request.origin), self.graph.resolve(request.destination),
+                   c, profile_for(request.cargo), weights_for(request), slack, self.graph.g)
+        ctx.view = self._view(ctx, overlay)
+        return ctx
+
+    def _view(self, ctx: _Ctx, overlay: RiskOverlay, base: nx.DiGraph | None = None) -> nx.DiGraph:
+        c = ctx.constraints
+        return self.graph.view(banned_modes=c.banned_modes, avoid_corridors=c.avoid_corridors,
+                               adr_tunnels_banned=c.adr_tunnels_banned, closed_corridors=overlay.closed, base=base)
+
+    def _start(self, leg: Leg, position: tuple[float, float] | None) -> tuple[nx.DiGraph | None, str, str]:
+        """(graph to search, start node, description) for cargo currently on `leg`."""
+        if position is None:  # not moving yet: start where the current leg starts
+            hub = leg.from_node if leg.from_node in LOCATIONS else leg.to_node
+            return None, hub, hub
+        lat, lon = position
+        if leg.mode == SEA:  # a ship can turn around anywhere: live voyages from its position
+            g, node = self.graph.start_at_sea(lat, lon)
+            return g, node, f"at sea ({lat:.2f}, {lon:.2f})"
+        if leg.mode == AIR:  # a flight lands where it was going
+            return None, leg.to_node, leg.to_node
+        # road/rail: carry on from the nearest city on this mode, no reloading
+        loc = min((c for c, l in LOCATIONS.items() if leg.mode in l.modes),
+                  key=lambda c: (LOCATIONS[c].lat - lat) ** 2 + (LOCATIONS[c].lon - lon) ** 2)
+        return None, f"{loc}:{leg.mode}", f"{leg.mode.lower()} near {LOCATIONS[loc].name}"
+
+    def _scorer(self, ctx: _Ctx) -> RouteScorer:
+        return RouteScorer(ctx.weights, slack_days=ctx.slack_days,
+                           speed_matters=ctx.request.preset == Preset.FASTEST or ctx.request.urgency == "high")
+
+    def _pool(self, ctx: _Ctx) -> tuple[list[_Candidate], dict]:
+        """Feasible, de-duplicated candidates (on-time ones only, if any make the deadline)."""
         paths = self._candidate_paths(ctx)
         built = [self._build(p, ctx) for p in paths]
         unique = list({tuple((l.from_node, l.to_node, l.mode, *l.corridors) for l in c.legs): c for c in built}.values())
         feasible = [c for c in unique if not c.rejected]
         on_time = [c for c in feasible if ctx.slack_days is None or c.base_days <= ctx.slack_days]
-        pool = on_time or feasible  # if nothing can make the deadline, still show the least-late routes
-        if not pool:
-            raise NoRouteFound(f"{request.origin} -> {request.destination}: no feasible route "
-                               f"({len(paths)} paths, rejected: {sorted({c.rejected for c in unique})})")
+        stats = {"paths": len(paths), "unique": len(unique), "feasible": len(feasible), "on_time": len(on_time),
+                 "rejected": sorted({c.rejected for c in unique if c.rejected})}
+        return on_time or feasible, stats  # nothing makes the deadline: still show the least-late routes
 
-        scorer = RouteScorer(ctx.weights, slack_days=ctx.slack_days,
-                             speed_matters=request.preset == Preset.FASTEST or request.urgency == "high")
-        chosen = self._select(pool, scorer)
-        scores = scorer.score([c.metrics for c in chosen])
-        order = sorted(range(len(chosen)), key=lambda i: -scores[i]["total"])
-        options, contingencies = [], []
-        for rank, i in enumerate(order, start=1):
-            opt = self._to_dto(f"R{rank}", chosen[i], scores[i], ctx)
-            opt.recommended = rank == 1  # code default; route_advisor may pick another valid key
-            plan_b = self._contingency(chosen[i], opt, ctx)
-            if plan_b:
-                contingencies.append(plan_b)
-            options.append(opt)
-
-        meta = {
+    def _meta(self, ctx: _Ctx, stats: dict, options: list[RouteOptionDTO]) -> dict:
+        return {
             "graph_version": self.graph.version,
-            "overlay_hash": overlay.hash(),
-            "overlay": overlay.snapshot(),
+            "overlay_hash": ctx.overlay.hash(),
+            "overlay": ctx.overlay.snapshot(),
             "origin": ctx.src,
             "destination": ctx.dst,
             "weights": {k: round(v, 4) for k, v in ctx.weights.items()},
             "k": [self.k, self.k_extreme],
-            "paths": len(paths),
-            "unique": len(unique),
-            "feasible": len(feasible),
-            "on_time": len(on_time),
+            **stats,
             "options": [o.key for o in options],
         }
-        return PlanResult(options, contingencies, meta)
-
-    # ------------------------------------------------------------ setup
-    def _context(self, request: RoutingRequest, overlay: RiskOverlay, today: dt.date) -> _Ctx:
-        c = effective_constraints(request)
-        view = self.graph.view(banned_modes=c.banned_modes, avoid_corridors=c.avoid_corridors,
-                               adr_tunnels_banned=c.adr_tunnels_banned, closed_corridors=overlay.closed)
-        slack = (request.deadline - today).days if request.deadline else None
-        return _Ctx(request, overlay, self.graph.resolve(request.origin), self.graph.resolve(request.destination),
-                    c, profile_for(request.cargo), weights_for(request), slack, view)
 
     def _edge_weight(self, ctx: _Ctx, weights: dict[str, float] | None = None):
         """Scalarized weight used only to *generate* candidates; real scoring happens on full metrics."""
@@ -161,14 +218,14 @@ class RouteSolver:
 
     # ------------------------------------------------------------ one candidate
     def _build(self, path: list[str], ctx: _Ctx) -> _Candidate:
-        g, overlay, req, prof = self.graph.g, ctx.overlay, ctx.request, ctx.profile
+        g, overlay, req, prof = ctx.view, ctx.overlay, ctx.request, ctx.profile
         legs: list[Leg] = []
         via: list[list[str]] = []  # display names per leg (tracked corridors + notable passages)
         move_km: dict[tuple[str, str], float] = {}
         visited: list[str] = []
         base_days = freight = handling = 0.0
         co2_per_t = 0.0
-        start_hub = None
+        start_hub = g.nodes[path[0]]["loc"]  # a hub, or a city/ship already on the move (replan)
         for u, v in zip(path, path[1:]):
             e = g.edges[u, v]
             base_days += e["days"]
@@ -214,7 +271,7 @@ class RouteSolver:
         }
         cost_breakdown = {k: _eur(v) for k, v in cost.items() if v > 0}
 
-        countries = [LOCATIONS[loc].country for loc in dict.fromkeys(visited)]
+        countries = [LOCATIONS[loc].country for loc in dict.fromkeys(visited) if loc in LOCATIONS]
         borders = sum(1 for a, b in zip(countries, countries[1:]) if a != b and not (a in EU_CUSTOMS and b in EU_CUSTOMS))
         sanctioned = any(c in SANCTIONED_COUNTRIES for c in countries)
         mismatches = sum(1 for leg in legs if leg.mode == ROAD and prof.road_km_soft_limit and leg.km > prof.road_km_soft_limit)
@@ -266,10 +323,89 @@ class RouteSolver:
         return shared / max(min(sum(a.move_km.values()), sum(b.move_km.values())), 1e-9) > self.overlap_limit
 
     # ------------------------------------------------------------ output
+    def _rank(self, routes: list[_Candidate], wait: _Candidate | None, scorer: RouteScorer, ctx: _Ctx,
+              *, with_plan_b: bool) -> tuple[list[RouteOptionDTO], list[RouteOptionDTO]]:
+        """Score together, key routes R1.. by score, add WAIT; recommended = best feasible total."""
+        scored = routes + ([wait] if wait and not wait.rejected else [])
+        scores = scorer.score([c.metrics for c in scored]) if scored else []
+        by_score = sorted(range(len(scored)), key=lambda i: -scores[i]["total"])
+        options, contingencies, rank = [], [], 0
+        for i in by_score:
+            c = scored[i]
+            if c.kind == "WAIT":
+                options.append(self._to_dto("WAIT", c, scores[i], ctx))
+                continue
+            rank += 1
+            opt = self._to_dto(f"R{rank}", c, scores[i], ctx)
+            if with_plan_b and (plan_b := self._contingency(c, opt, ctx)):
+                contingencies.append(plan_b)
+            options.append(opt)
+        if wait and wait.rejected:  # shown greyed out, with the reason; never recommended
+            options.append(self._to_dto("WAIT", wait, {}, ctx))
+        if options:
+            options[0].recommended = True  # code default; route_advisor may pick another valid key
+        return options, contingencies
+
+    def _continuation(self, ctx: _Ctx, base: nx.DiGraph | None, blocking: tuple[str, ...]) -> tuple[list[str], _Ctx] | None:
+        """Best way on from here with the blocking corridors open again: the plan as if nothing happened."""
+        reopened = ctx.overlay
+        for code in blocking:
+            reopened = reopened.with_status(code, "OPEN")
+        cont_ctx = replace(ctx, overlay=reopened, view=self._view(ctx, reopened, base))
+        try:
+            return nx.shortest_path(cont_ctx.view, ctx.src, ctx.dst, weight=self._edge_weight(cont_ctx)), cont_ctx
+        except nx.NetworkXNoPath:
+            return None
+
+    def _wait(self, path: list[str], cont_ctx: _Ctx, ctx: _Ctx, blocking: tuple[str, ...],
+              demurrage_per_day: float) -> _Candidate:
+        """Hold until the blocking corridors reopen (length from the real, closed overlay), then continue."""
+        c = self._build(path, cont_ctx)
+        w = max(ctx.overlay.get(code).delay_if_closed for code in blocking)
+        m, prof, cargo = c.metrics, ctx.profile, ctx.request.cargo
+        value, t = float(cargo.value_eur), cargo.weight_t
+        cost = {k: float(v) for k, v in c.cost_breakdown.items()}
+        cost["DEMURRAGE"] = demurrage_per_day * w
+        cost["OTHER"] = cost.get("OTHER", 0.0) + (prof.per_day_eur_per_t * t + prof.escort_eur_per_day) * w
+        cost["CARRYING"] = cost.get("CARRYING", 0.0) + value * CARRYING_COST_PCT_YEAR * w / 365
+        c.cost_breakdown = {k: _eur(v) for k, v in cost.items() if v > 0}
+        # nobody knows the reopening date: half as long .. twice as long
+        m.days_p10, m.days_p50, m.days_p90 = round(m.days_p10 + w / 2, 1), round(m.days_p50 + w, 1), round(m.days_p90 + 2 * w, 1)
+        m.expected_days = round(m.expected_days + w, 1)
+        m.landed_cost = float(sum(c.cost_breakdown.values()))
+        if ctx.slack_days is not None and m.days_p50 > ctx.slack_days:
+            m.p_miss_deadline = max(m.p_miss_deadline, 0.5)
+        c.base_days += w
+        c.kind, c.wait_days, c.wait_for = "WAIT", w, blocking
+        max_days = ctx.constraints.max_transit_days
+        c.rejected = f"waiting breaks the cargo's max transit time ({max_days:g} days left)" \
+            if max_days is not None and m.days_p90 > max_days else c.rejected
+        return c
+
+    def _break_even(self, options: list[RouteOptionDTO], wait: _Candidate, ctx: _Ctx, demurrage_per_day: float) -> None:
+        """Reroute R: 'waiting beats R if the corridor reopens within N days' (cost, capped by the deadline)."""
+        cargo, prof = ctx.request.cargo, ctx.profile
+        daily = (demurrage_per_day + float(cargo.value_eur) * CARRYING_COST_PCT_YEAR / 365
+                 + prof.per_day_eur_per_t * cargo.weight_t + prof.escort_eur_per_day)
+        base_cost = wait.metrics.landed_cost - daily * wait.wait_days  # continuing once reopened, no waiting
+        base_days = wait.metrics.days_p50 - wait.wait_days
+        routes = [o for o in options if o.kind == "ROUTE"]
+        for o in routes:
+            n = (float(o.landed_cost) - base_cost) / daily if daily > 0 else float("inf")
+            if ctx.slack_days is not None:
+                n = min(n, ctx.slack_days - base_days)
+            o.break_even_days = round(max(n, 0.0), 1) if n != float("inf") else None
+        wait_dto = next(o for o in options if o.kind == "WAIT")
+        wait_dto.break_even_days = routes[0].break_even_days if routes else None
+
     def _to_dto(self, key: str, c: _Candidate, score: dict, ctx: _Ctx, label_prefix: str = "") -> RouteOptionDTO:
         m = c.metrics
+        if c.kind == "WAIT":
+            names = " · ".join(CORRIDORS[x][0] for x in c.wait_for)
+            label_prefix = f"Wait ~{c.wait_days:g} days for {names} to reopen, then: "
         return RouteOptionDTO(
-            key=key, kind="ROUTE", label=label_prefix + _label(c.legs, c.via), legs=c.legs,
+            key=key, kind=c.kind, label=label_prefix + _label(c.legs, c.via), legs=c.legs,
+            infeasible_reason=c.rejected if c.kind == "WAIT" else "",
             transit_days=m.expected_days, days_p10=m.days_p10, days_p90=m.days_p90,
             cost_breakdown=c.cost_breakdown, landed_cost=_eur(m.landed_cost), co2_kg=m.co2_kg,
             risk_score=m.risk_score, score={**score, "p_miss_deadline": m.p_miss_deadline,

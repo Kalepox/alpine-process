@@ -21,7 +21,7 @@ Rule (unchanged): **code computes every number, Gemini classifies, maps and expl
 | # | Component | Kind | Input → Output | Why it is an LLM / not |
 |---|---|---|---|---|
 | 1 | `intent_agent` | ADK `LlmAgent`, `output_schema=RoutingRequest` | free text ("40 t copper cathodes, urgent, by Mar 3") → `RoutingRequest`, incl. `cargo_class`, `dg_class`, `temp_range`, preset/weights | language → parameters |
-| 2 | `risk_scout` | `ParallelAgent` over 4 groups (**sea chokepoints · land borders/rail · road & alpine passes · air**), each a `SequentialAgent[searcher(google_search) → structurer(output_schema=list[RiskAssessment])]` | news → per-corridor status, p_close_30d, duration, war_risk%, sources | unstructured news; kept as searcher → structurer so the grounding sources are captured cleanly by the searcher step (see §B2.12) |
+| 2 | `risk_scout` | `ParallelAgent` over 4 groups (**sea chokepoints · land borders/rail · road & alpine passes · air**), each a `SequentialAgent[searcher(google_search) → structurer(output_schema=list[RiskSignal])]` | news → per-corridor status + **risk level** (LOW/ELEVATED/HIGH/SEVERE), reopening estimate and war-risk % only if the news states them; code maps levels to probabilities (`risk.LEVELS`) | unstructured news; kept as searcher → structurer so the grounding sources are captured cleanly by the searcher step (see §B2.12) |
 | 3 | `route_advisor` | `LlmAgent`, **no tools**, `output_schema=AdvisorVerdict{recommended_id, rationale, tradeoffs[{option_id,text}], plan_b_required, reroute_or_wait}` | solver options (JSON in prompt) → verdict | explains trade-offs; code checks that the ids exist and renders the numbers from data, so no number comes from the LLM |
 | 4 | `route_monitor` | **deterministic pipeline** (no LLM), run by a loop command | tracking alerts + positions + corridor status + weather + road news → `Disruption` list → `raise_alert` → auto `replan` | detection must be reliable and cheap |
 | 5 | `monora_assistant` ✨ | root `LlmAgent` with tools + `AgentTool(route_advisor)` | free-text questions; root agent for `adk web` | stretch; read-only + request-only tools |
@@ -179,3 +179,18 @@ route_advisor then returns `reroute_or_wait` and its rationale. The pipeline cal
   - `on_tool_error_callback`, `on_model_error_callback`, `on_event_callback`
 - `LlmAgent` also has `retry_config` and `timeout` fields, which we use for the hardening step.
 - `output_schema` accepts `list[Model]`, so `list[RiskAssessment]` works directly. All v2 DTOs were checked to load as ADK output schemas.
+- **`SequentialAgent` and `ParallelAgent` are deprecated in 2.15** in favour of the graph-based `Workflow`. They still work and are tested with `AuditPlugin`. We keep them (pinned `<3`), and moving `risk_scout` to `Workflow` is an H17 task if time allows.
+
+## B2.13 As built in H7–10
+- **risk_scout classifies, code quantifies.** The structurer outputs a `RiskSignal` with a status and a level, not probabilities. `risk.assess()` maps the level to `risk_score` and `p_close_30d` and attaches the group's Google Search grounding URLs as sources. A closure with no sources is applied as RESTRICTED.
+- **The replan start is the cargo's real position.**
+  - A ship at sea gets live searoute voyages from its position to every port (about 0.3 s), so "turn around via the Cape" or "divert to another port" are real options.
+  - Road and rail continue from the nearest city on that mode, a flight lands where it was going, and cargo that hasn't departed starts at the current leg's origin.
+- **WAIT** means holding until the closed corridor reopens, then continuing on the best route as if it were open.
+  - Its cost covers demurrage, carrying cost, and reefer and escort per day.
+  - Its days spread from half to twice the estimated closure, since nobody knows the reopening date.
+  - It is infeasible (shown greyed, never recommended) if it would break a perishable's remaining shelf life.
+- **Break-even** per reroute: waiting beats it if the corridor reopens within N days, from the cost comparison, capped by the deadline. In the demo, Bab-el-Mandeb closed for 14 days gives a break-even of 18 days, so WAIT is recommended. A 60-day closure flips the recommendation to the Cape.
+- **Pre-approval** is requested only for the recommended option's spend above "carrying on as planned" (the baseline), and only for the categories that grow.
+- **scan/simulate re-plan affected shipments right away.** In H10–13 the monitor adds dedupe and cooldown.
+- **The parsed request is persisted.** When `plan_routes` parsed free text, it saves the parsed request (new A service `update_shipment_request`), so a replan never re-interprets the text.
