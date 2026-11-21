@@ -19,7 +19,7 @@ def _index() -> dict[str, dict]:
     with DATA.open(encoding="utf-8") as f:
         for r in csv.DictReader(f):
             a = {"iata": r["iata"], "icao": r["icao"], "name": r["name"], "city": r["city"], "country": r["country"],
-                 "lat": float(r["lat"]), "lon": float(r["lon"])}
+                 "lat": float(r["lat"]), "lon": float(r["lon"]), "size": r.get("size", "")}
             if r["icao"]:
                 idx.setdefault(r["icao"].upper(), a)
             if r["iata"]:
@@ -48,6 +48,19 @@ def short_name(a: dict) -> str:
 def label(a: dict) -> str:
     """'Liège (LGG)'"""
     return f"{short_name(a)} ({code_of(a)})"
+
+
+def nearest(lat: float, lon: float, *, large_within_km: float = 400) -> dict:
+    """Nearest airport with an IATA code, preferring a large (cargo-capable) one if there's
+    one within `large_within_km`."""
+    from core.geo import haversine_km
+
+    airports = [a for a in {id(a): a for a in _index().values()}.values() if a["iata"]]
+    by_dist = sorted(airports, key=lambda a: haversine_km([lat, lon], [a["lat"], a["lon"]]))
+    large = next((a for a in by_dist if a["size"] == "large"), None)
+    if large and haversine_km([lat, lon], [large["lat"], large["lon"]]) <= large_within_km:
+        return large
+    return by_dist[0]
 
 
 def parse_codes(text: str) -> list[str]:

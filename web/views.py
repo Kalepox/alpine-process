@@ -322,7 +322,8 @@ def live(request):
 @login_required
 def plan(request):
     ships = data.shipments()
-    return render(request, "web/plan.html", {"map_data": data.map_payload(ships)})
+    return render(request, "web/plan.html", {"map_data": data.map_payload(ships),
+                                             "plan_modes": [("SEA", "Sea"), ("AIR", "Air"), ("ROAD", "Road")]})
 
 
 def _plan_from(request):
@@ -333,7 +334,14 @@ def _plan_from(request):
         raise routing.RoutingError("Set the ship's position: click on the map or type lat and lon.")
     if abs(lat) > 90 or abs(lon) > 180:
         raise routing.RoutingError("Coordinates out of range.")
-    return routing.plan(lat, lon, request.POST.get("destination", ""))
+    def number(name, default):
+        try:
+            return float(str(request.POST.get(name, default)).replace(",", "").strip() or default)
+        except ValueError:
+            raise routing.RoutingError(f"{name.replace('_', ' ').capitalize()} must be a number.")
+
+    return routing.plan(lat, lon, request.POST.get("destination", ""), request.POST.get("mode", "SEA"),
+                        weight_t=number("weight_t", 0), value_eur=number("value_eur", 0))
 
 
 @login_required
@@ -360,7 +368,7 @@ def plan_save(request):
         return redirect("web:plan")
     s = _run(request, actions.add_planned_shipment, current_user(request), request.POST.get("name", "").strip(),
              request.POST.get("cargo", "").strip(), p,
-             ok=lambda s: f"{s['ref']} planned via {p['port']}, then truck to {p['destination']}.")
+             ok=lambda s: f"{s['ref']} planned: " + " → ".join(l.get("label", l["mode"]) for l in p["legs"]) + ".")
     return redirect("web:shipment", sid=s["id"]) if s else redirect("web:plan")
 
 

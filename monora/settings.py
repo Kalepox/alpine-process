@@ -153,3 +153,6 @@ DEMO_COMPANY = {
 EMAIL_BACKEND = env_str("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
 DEFAULT_FROM_EMAIL = env_str("DEFAULT_FROM_EMAIL", "autopilot@monora.example")
 REPORT_RECIPIENTS = [r for r in env_str("REPORT_RECIPIENTS", "finance@monora.example").split(",") if r]
+
+# A stale form (after login / demo_reset) reloads the page with a message instead of a raw 403.
+CSRF_FAILURE_VIEW = "monora.views.csrf_failure"

@@ -121,9 +121,114 @@ def road_leg(lat1, lon1, lat2, lon2):
                 hours=drive_h + (drive_h // TRUCK_DRIVE_H_PER_DAY) * (24 - TRUCK_DRIVE_H_PER_DAY), source="estimate")
 
 
-def plan(start_lat: float, start_lon: float, destination: str) -> dict:
-    """Best sea(+truck) route from a position at sea to a destination."""
+AIR_KMH = 850
+AIR_HANDLING_H = 6           # cargo acceptance + customs at each airport
+FEEDER_MIN_KM = 30           # truck to / from the airport only if it's farther than this
+MODES = ("SEA", "AIR", "ROAD")
+
+
+def _timeline(legs: list, handling_after: dict) -> tuple:
+    """Stamp depart/arrive on legs; handling_after[i] = hours spent after leg i. Returns (legs, eta, hours)."""
+    t = timezone.now()
+    total = 0.0
+    for i, leg in enumerate(legs):
+        leg["depart"] = t
+        t = t + timedelta(hours=leg["hours"])
+        leg["arrive"] = t
+        extra = handling_after.get(i, 0)
+        t = t + timedelta(hours=extra)
+        total += leg["hours"] + extra
+        leg["km"] = round(leg["km"])
+        leg["days"] = round(leg["hours"] / 24, 1)
+    return legs, t, total
+
+
+def air_leg(a: dict, b: dict) -> dict:
+    from core.geo import great_circle
+
+    d = km(a["lat"], a["lon"], b["lat"], b["lon"])
+    return dict(mode="AIR", coords=great_circle([a["lat"], a["lon"]], [b["lat"], b["lon"]], 48), km=d, hours=d / AIR_KMH)
+
+
+def plan_air(start_lat: float, start_lon: float, dlat: float, dlon: float, dlabel: str) -> dict:
+    """Truck to the nearest major airport, fly, truck the last stretch (feeders only if needed)."""
+    from integrations import airports
+
+    origin, dest = airports.nearest(start_lat, start_lon), airports.nearest(dlat, dlon)
+    if origin["iata"] == dest["iata"]:
+        raise RoutingError("Start and destination share the same airport: use Road instead.")
+    legs, handling = [], {}
+    if km(start_lat, start_lon, origin["lat"], origin["lon"]) > FEEDER_MIN_KM:
+        legs.append(dict(road_leg(start_lat, start_lon, origin["lat"], origin["lon"]), label=f"By truck to {airports.label(origin)}"))
+        handling[len(legs) - 1] = 0
+    legs.append(dict(air_leg(origin, dest), label=f"By air {origin['iata']} → {dest['iata']}"))
+    air_index = len(legs) - 1
+    if km(dlat, dlon, dest["lat"], dest["lon"]) > FEEDER_MIN_KM:
+        legs.append(dict(road_leg(dest["lat"], dest["lon"], dlat, dlon), label=f"By truck to {dlabel}"))
+    handling[air_index] = AIR_HANDLING_H  # unloading + customs at the arrival airport
+    if air_index > 0:
+        handling[air_index - 1] = AIR_HANDLING_H  # acceptance at the departure airport
+    legs, eta, hours = _timeline(legs, handling)
+    return dict(
+        mode="AIR", start=[start_lat, start_lon], destination=dlabel, dest_latlon=[dlat, dlon],
+        port=airports.label(dest), port_latlon=[dest["lat"], dest["lon"]], origin_hub=airports.label(origin),
+        airports=[origin["iata"], dest["iata"]], legs=legs, total_km=sum(l["km"] for l in legs),
+        total_days=round(hours / 24, 1), eta=eta, handling_h=AIR_HANDLING_H, alternatives=[],
+    )
+
+
+def plan_road(start_lat: float, start_lon: float, dlat: float, dlon: float, dlabel: str) -> dict:
+    leg = dict(road_leg(start_lat, start_lon, dlat, dlon), label=f"By truck to {dlabel}")
+    legs, eta, hours = _timeline([leg], {})
+    return dict(mode="ROAD", start=[start_lat, start_lon], destination=dlabel, dest_latlon=[dlat, dlon],
+                port=dlabel, port_latlon=[dlat, dlon], legs=legs, total_km=legs[0]["km"],
+                total_days=round(hours / 24, 1), eta=eta, handling_h=0, alternatives=[])
+
+
+def estimate_costs(legs: list, weight_t: float, value_eur: float, total_days: float) -> dict:
+    """Potential cost of a plan, from B's sample rate tables (autopilot/domain/tables.py):
+    freight = rate x t x km per leg, handling at both terminals of each leg, insurance on value.
+    CO2 and inventory carrying cost are shown but are not invoiced spend."""
+    from decimal import Decimal
+
+    from autopilot.domain.tables import BASE_INSURANCE_PCT, CARRYING_COST_PCT_YEAR, MODES as RATES
+
+    freight = handling = co2 = 0.0
+    rows = []
+    for leg in legs:
+        r = RATES[leg["mode"]]
+        f = r.eur_per_tkm * weight_t * leg["km"]
+        h = 2 * r.handling_eur_per_t * weight_t
+        freight, handling, co2 = freight + f, handling + h, co2 + r.co2_g_per_tkm * weight_t * leg["km"] / 1000
+        rows.append(dict(label=leg.get("label", leg["mode"]), mode=leg["mode"], freight=round(f), handling=round(h)))
+    insurance = value_eur * BASE_INSURANCE_PCT / 100
+    breakdown = {"FREIGHT": Decimal(round(freight)), "PORT": Decimal(round(handling)),
+                 "INSURANCE": Decimal(round(insurance))}
+    total = sum(breakdown.values(), Decimal(0))
+    return dict(breakdown=breakdown, total=total, rows=rows, co2_kg=round(co2),
+                carrying=Decimal(round(value_eur * CARRYING_COST_PCT_YEAR * total_days / 365)),
+                landed=Decimal(round(value_eur)) + total, weight_t=weight_t, value_eur=value_eur,
+                insurance_pct=BASE_INSURANCE_PCT)
+
+
+def plan(start_lat: float, start_lon: float, destination: str, mode: str = "SEA",
+         weight_t: float = 0.0, value_eur: float = 0.0) -> dict:
+    """Route from a start point to a destination with the preferred mode, plus its potential cost:
+    SEA (ship at sea -> port -> truck), AIR (truck -> airport -> fly -> truck) or ROAD."""
+    p = _plan_route(start_lat, start_lon, destination, mode)
+    p["costs"] = estimate_costs(p["legs"], max(weight_t, 0.0), max(value_eur, 0.0), p["total_days"])
+    return p
+
+
+def _plan_route(start_lat: float, start_lon: float, destination: str, mode: str = "SEA") -> dict:
+    mode = (mode or "SEA").upper()
+    if mode not in MODES:
+        raise RoutingError(f"Unknown mode {mode}.")
     dlat, dlon, dlabel = geocode(destination)
+    if mode == "AIR":
+        return plan_air(start_lat, start_lon, dlat, dlon, dlabel)
+    if mode == "ROAD":
+        return plan_road(start_lat, start_lon, dlat, dlon, dlabel)
     by_dist = sorted(PORTS, key=lambda p: km(dlat, dlon, p[1], p[2]))
     nearest = by_dist[0]
     if km(dlat, dlon, nearest[1], nearest[2]) <= DIRECT_PORT_KM:
@@ -147,18 +252,12 @@ def plan(start_lat: float, start_lon: float, destination: str) -> dict:
         raise RoutingError("No sea route found from that position. Is it at sea?")
 
     best = min(options, key=lambda o: o["hours"])
-    now = timezone.now()
-    t = now
-    for leg in best["legs"]:
-        leg["depart"] = t
-        t = t + timedelta(hours=leg["hours"])
-        leg["arrive"] = t
-        if leg["mode"] == "SEA" and len(best["legs"]) > 1:
-            t = t + timedelta(hours=PORT_HANDLING_H)
-        leg["km"] = round(leg["km"])
-        leg["days"] = round(leg["hours"] / 24, 1)
+    best["legs"][0]["label"] = f"By sea to {best['port']}"
+    if len(best["legs"]) > 1:
+        best["legs"][1]["label"] = f"By truck to {dlabel}"
+    legs, t, _ = _timeline(best["legs"], {0: PORT_HANDLING_H} if len(best["legs"]) > 1 else {})
     return dict(
-        start=[start_lat, start_lon], destination=dlabel, dest_latlon=[dlat, dlon], port=best["port"], port_latlon=best["port_latlon"],
+        mode="SEA", start=[start_lat, start_lon], destination=dlabel, dest_latlon=[dlat, dlon], port=best["port"], port_latlon=best["port_latlon"],
         legs=best["legs"], total_km=sum(l["km"] for l in best["legs"]), total_days=round(best["hours"] / 24, 1), eta=t,
         handling_h=PORT_HANDLING_H if len(best["legs"]) > 1 else 0,
         alternatives=[dict(port=o["port"], days=round(o["hours"] / 24, 1)) for o in sorted(options, key=lambda o: o["hours"]) if o is not best],

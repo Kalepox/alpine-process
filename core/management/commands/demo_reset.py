@@ -23,6 +23,7 @@ class Command(BaseCommand):
         parser.add_argument("--noinput", "--no-input", action="store_false", dest="interactive")
         parser.add_argument("--keep-files", action="store_true", help="Don't delete media/ and outbox/ files.")
         parser.add_argument("--no-tracks", action="store_true", help="Skip loading sample_data/tracks.json.")
+        parser.add_argument("--demo", action="store_true", help="Re-create the SAMPLE data too (default: empty).")
 
     def handle(self, *args, **opts):
         if opts["interactive"]:
@@ -35,6 +36,8 @@ class Command(BaseCommand):
         if not opts["keep_files"]:
             self._clear_files()
         seed_opts = {} if opts["no_tracks"] else {"with_tracks": str(settings.TRACKS_FILE)}
+        if opts["demo"]:
+            seed_opts["demo"] = True
         call_command("seed_demo", stdout=self.stdout, **seed_opts)
         call_command("verify_audit", stdout=self.stdout)
         self.stdout.write(self.style.SUCCESS("demo_reset: done. Log in as elena / marco (demo1234)."))

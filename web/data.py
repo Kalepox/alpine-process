@@ -3,7 +3,7 @@
 Read side of the UI. Views call ONLY these functions (plus web/actions.py for writes).
 
 Reads the real database (core.models). The returned shapes (dict keys) are the
-same as the old mock (web/mock_data.py), so templates and map.js didn't change.
+same as the original UI mock, so templates and map.js didn't change.
 """
 from __future__ import annotations
 

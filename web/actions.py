@@ -227,16 +227,21 @@ def add_planned_shipment(user, name, cargo, plan):
     (one AgentRun), approved right away when the user is a manager."""
     u = _u(user)
     lat, lon = plan["start"]
+    modes = [leg["mode"] for leg in plan["legs"]]
+    main_mode = "AIR" if "AIR" in modes else "SEA" if "SEA" in modes else "ROAD"
     request = {
-        "ref": name or f"Vessel to {plan['destination']}"[:80], "mode": "SEA", "cargo": cargo or "General cargo",
-        "origin": f"At sea ({lat:.2f}, {lon:.2f})", "origin_latlon": [lat, lon],
-        "destination": plan["destination"], "dest_latlon": plan["dest_latlon"], "goal": "Fastest",
-        "via_port": plan["port"],
+        "ref": name or f"{'Flight' if main_mode == 'AIR' else 'Vessel' if main_mode == 'SEA' else 'Truck'} to {plan['destination']}"[:80],
+        "mode": main_mode, "cargo": cargo or "General cargo",
+        "origin": plan.get("origin_hub") if main_mode == "AIR" and len(plan["legs"]) == 1 else
+                  (f"At sea ({lat:.2f}, {lon:.2f})" if main_mode == "SEA" else f"{lat:.2f}, {lon:.2f}"),
+        "origin_latlon": [lat, lon], "destination": plan["destination"], "dest_latlon": plan["dest_latlon"],
+        "goal": "Fastest", "via": plan["port"], "airports": plan.get("airports", []),
+        "quantity": plan["costs"]["weight_t"], "unit": "mt", "cargo_value": plan["costs"]["value_eur"],
     }
     s = _call(shipments.create_planning_shipment, request, user=u)
-    legs = [{"from_node": request["origin"] if i == 0 else plan["port"],
-             "to_node": plan["port"] if i == 0 else plan["destination"],
-             "mode": "ROAD" if leg["mode"] != "SEA" else "SEA", "km": leg["km"], "days": leg["days"], "corridors": [],
+    legs = [{"from_node": (plan["legs"][i - 1].get("label", "").split(" to ")[-1] if i else request["origin"]),
+             "to_node": leg.get("label", "").split(" to ")[-1].split(" → ")[-1] or plan["destination"],
+             "mode": leg["mode"], "km": leg["km"], "days": leg["days"], "corridors": [],
              "geometry": [[pt[1], pt[0]] for pt in leg["coords"]]}  # B's Leg: GeoJSON [lon, lat]
             for i, leg in enumerate(plan["legs"])]
     from autopilot.domain.schemas import RouteOptionDTO
@@ -246,9 +251,11 @@ def add_planned_shipment(user, name, cargo, plan):
                           model="searoute (no LLM)", prompt_version="ui-planner")
     days = float(plan["total_days"])
     [option] = _call(shipments.save_route_options, s, [RouteOptionDTO.model_validate(dict(
-        key="P1", label=f"Via {plan['port']}", legs=legs, transit_days=days, days_p10=days, days_p90=days,
-        landed_cost=D("0"), co2_kg=0.0, risk_score=0.0,
-        rationale="Computed by the UI planner (sea lanes + road).", recommended=True,
+        key="P1", label=" → ".join(leg.get("label", leg["mode"]) for leg in plan["legs"])[:160],
+        legs=legs, transit_days=days, days_p10=days, days_p90=days,
+        cost_breakdown={**plan["costs"]["breakdown"], "CARRYING": plan["costs"]["carrying"]},
+        landed_cost=plan["costs"]["landed"], co2_kg=float(plan["costs"]["co2_kg"]), risk_score=0.0,
+        rationale=f"Computed by the UI planner ({main_mode.lower()}, preferred mode).", recommended=True,
     ))], run=run, actor_name="web.routing")
     audit.finish_run(run, AgentRun.Status.OK, summary=f"1 option via {plan['port']}")
     if user.get("is_manager"):

@@ -55,6 +55,9 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--reset", action="store_true", help="Flush the database first.")
+        parser.add_argument("--demo", action="store_true",
+                            help="Also create the SAMPLE data (vendors, budgets, customs rates, shipments, "
+                                 "expense history). Off by default: you enter your own data.")
         parser.add_argument(
             "--with-tracks", nargs="?", const=str(settings.TRACKS_FILE), default=None, metavar="PATH",
             help="Load cached real tracks (default sample_data/tracks.json, see snapshot_tracks).",
@@ -67,8 +70,16 @@ class Command(BaseCommand):
 
         self.seed_roles()
         with transaction.atomic():
+            corridors = self.seed_corridors()  # reference data the route planner needs, not sample data
+        if not options["demo"]:
+            self.stdout.write(self.style.SUCCESS(
+                f"seed_demo: users elena/marco/admin ({DEMO_PASSWORD}), {len(corridors)} corridors. "
+                "No sample data (add --demo for it)."
+            ))
+            return
+
+        with transaction.atomic():
             vendors = self.seed_vendors()
-            corridors = self.seed_corridors()
             self.seed_budgets()
             self.seed_customs_rates()
             ships = self.seed_shipments()
