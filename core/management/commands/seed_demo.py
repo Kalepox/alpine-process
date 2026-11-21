@@ -1,13 +1,29 @@
-"""seed_demo: roles and demo users (DEV_PLAN 0.9). Idempotent.
+"""seed_demo: roles, demo users and demo data (DEV_PLAN 0.9 + A.2). Idempotent.
 
-TODO(A): A.2 seed v1 (vendors, corridors, budgets, shipments, cost lines, history).
+  python manage.py seed_demo            # create / top up
+  python manage.py seed_demo --reset    # flush the DB first
+
+History is created through the real services (receive -> process -> request
+payment -> marco approves), so its audit trail and actual costs look exactly
+like what the demo produces live.
 """
+import io
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.core.management import call_command
 from django.core.management.base import BaseCommand
+from django.db import transaction
+from django.utils import timezone
+
+from core import demo_data
+from core.geo import point_along, shipment_path
+from core.models import Budget, Corridor, CostLine, ExpenseDocument, Position, Shipment, Vendor
+from core.services import approvals, expenses, shipments as shipment_svc
 
 DEMO_PASSWORD = "demo1234"
+SEED = "seed"  # actor name for everything this command does
 
 # ops: upload docs, resolve issues, view everything
 OPS_PERMS = [
@@ -23,7 +39,8 @@ OPS_PERMS = [
 MANAGER_PERMS = OPS_PERMS + ["approve_spend", "approve_payment", "export_payments"]
 
 GROUPS = {"ops": OPS_PERMS, "manager": MANAGER_PERMS}
-USERS = [("elena", "ops"), ("marco", "manager")]
+USERS = [("elena", "ops", "Elena", "Ops"), ("marco", "manager", "Marco", "Manager")]
+SPEED = {"SEA": 12.5, "AIR": 480.0, "ROAD": 70.0, "RAIL": 45.0}
 
 
 class Command(BaseCommand):
@@ -35,7 +52,24 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         if options["reset"]:
             call_command("flush", interactive=False)
+        self.now = timezone.now()
 
+        self.seed_roles()
+        with transaction.atomic():
+            vendors = self.seed_vendors()
+            corridors = self.seed_corridors()
+            self.seed_budgets()
+            ships = self.seed_shipments(corridors)
+        self.seed_history(vendors, ships)
+
+        self.stdout.write(self.style.SUCCESS(
+            f"seed_demo: users elena/marco/admin ({DEMO_PASSWORD}), {len(vendors)} vendors, "
+            f"{len(corridors)} corridors, {len(ships)} shipments, "
+            f"{ExpenseDocument.objects.count()} expense documents"
+        ))
+
+    # ------------------------------------------------------------------ roles
+    def seed_roles(self):
         for name, codenames in GROUPS.items():
             group, _ = Group.objects.get_or_create(name=name)
             perms = list(Permission.objects.filter(content_type__app_label="core", codename__in=codenames))
@@ -47,11 +81,153 @@ class Command(BaseCommand):
         User = get_user_model()
         if not User.objects.filter(username="admin").exists():
             User.objects.create_superuser("admin", "admin@example.com", DEMO_PASSWORD)
-        for username, group_name in USERS:
-            user, created = User.objects.get_or_create(username=username)
+        for username, group_name, first, last in USERS:
+            user, created = User.objects.get_or_create(
+                username=username, defaults={"first_name": first, "last_name": last}
+            )
             if created:
                 user.set_password(DEMO_PASSWORD)
                 user.save()
             user.groups.set([Group.objects.get(name=group_name)])
 
-        self.stdout.write(self.style.SUCCESS("seed_demo: groups ops/manager, users elena/marco/admin (demo1234)"))
+    # ------------------------------------------------------------ master data
+    def seed_vendors(self) -> dict[str, Vendor]:
+        vendors = {}
+        for v in demo_data.VENDORS:
+            data = {k: val for k, val in v.items() if k != "key"}
+            vendors[v["key"]], _ = Vendor.objects.update_or_create(vat_number=data.pop("vat_number"),
+                                                                    defaults=data)
+        return vendors
+
+    def seed_corridors(self) -> dict[str, Corridor]:
+        corridors = {}
+        for c in demo_data.CORRIDORS:
+            data = dict(c)
+            code = data.pop("code")
+            corridor, created = Corridor.objects.get_or_create(code=code, defaults=data)
+            if created and data.get("status"):
+                corridor.status_source = Corridor.Source.MANUAL
+                corridor.status_updated_at = self.now
+                corridor.save()
+            elif not created:  # refresh geometry/labels, never overwrite a live status
+                for k in ("name", "mode", "waypoints", "war_risk_pct"):
+                    setattr(corridor, k, data[k])
+                corridor.save()
+            corridors[code] = corridor
+        return corridors
+
+    def seed_budgets(self):
+        period = self.now.strftime("%Y-%m")
+        for category, amount in demo_data.BUDGETS.items():
+            Budget.objects.update_or_create(category=category, period=period, defaults={"amount": amount})
+
+    def seed_shipments(self, corridors) -> dict[str, Shipment]:
+        ships = {}
+        for s in demo_data.SHIPMENTS:
+            data = dict(s)
+            ref = data.pop("ref")
+            quoted = data.pop("quoted")
+            alert = data.pop("alert", None)
+            corridor = corridors[data.pop("corridor")]
+            if "departed" in data:
+                departed = self.now + timedelta(days=data.pop("departed"))
+                eta = self.now + timedelta(days=data.pop("eta"))
+            else:
+                departed = self.now + timedelta(hours=data.pop("departed_hours"))
+                eta = self.now + timedelta(hours=data.pop("eta_hours"))
+            deadline_days = data.pop("deadline", None)
+
+            shipment, created = Shipment.objects.get_or_create(
+                ref=ref,
+                defaults={
+                    **data,
+                    "tracker_id": demo_data.TRACKERS.get(ref, ""),
+                    "corridor": corridor,
+                    "departed_at": departed,
+                    "eta_planned": eta,
+                    "eta_current": eta,
+                    "deadline": (self.now + timedelta(days=deadline_days)).date() if deadline_days else None,
+                },
+            )
+            ships[ref] = shipment
+            if not created:
+                continue
+
+            for category, amount in quoted.items():
+                CostLine.objects.create(shipment=shipment, category=category, quoted=amount, projected=amount)
+
+            # starting position along the route, so the map has something before collectors run
+            total = (eta - departed).total_seconds()
+            fraction = (self.now - departed).total_seconds() / total if total > 0 else 0
+            (lat, lon), heading = point_along(shipment_path(shipment), fraction)
+            Position.objects.create(
+                shipment=shipment, lat=lat, lon=lon, heading=round(heading, 1), speed=SPEED[shipment.mode],
+                ts=self.now, source=Position.Source.REPLAY,
+            )
+            if alert:
+                shipment_svc.raise_alert(shipment, alert["code"], alert["severity"], alert["message"], actor_name=SEED)
+        return ships
+
+    # ---------------------------------------------------------------- history
+    def seed_history(self, vendors, ships):
+        marco = get_user_model().objects.get(username="marco")
+        for h in demo_data.HISTORY:
+            vendor = vendors[h["vendor"]]
+            if ExpenseDocument.objects.filter(vendor=vendor, number=h["number"]).exists():
+                continue
+            shipment = ships[h["shipment"]]
+            date = (self.now + timedelta(days=h["days"])).date()
+            total = h["net"] + h["vat"]
+            pdf = _history_pdf(vendor, shipment, h, date, total)
+
+            with transaction.atomic():
+                doc = expenses.receive_document(
+                    pdf, filename=f"{h['number'].replace('/', '-')}.pdf",
+                    actor_type="system", actor_name=SEED, shipment=shipment,
+                )
+                approvals.set_doc_status(doc, "PROCESSING", actor_type="system", actor_name=SEED)
+                expenses.apply_extraction(
+                    doc,
+                    {"vendor": vendor, "shipment": shipment, "doc_type": h["doc_type"], "number": h["number"],
+                     "date": date, "category": h["category"], "net": h["net"], "vat": h["vat"],
+                     "total": total, "currency": "EUR", "iban": vendor.iban},
+                    actor_type="system", actor_name=SEED,
+                    extracted={"source": "seed history", "vendor_name": vendor.name},
+                    agent_summary="Historical document (seeded): already checked and paid.",
+                )
+                approvals.set_doc_status(doc, "READY", actor_type="system", actor_name=SEED)
+                pa = approvals.request_payment(doc, requested_by=SEED)
+                approvals.decide_payment(pa.pk, marco, True, note="historical payment (seed)")
+        # TODO(A.5): export the approved history through build_export_batch so it ends up EXPORTED.
+
+
+def _history_pdf(vendor, shipment, h, date, total) -> bytes:
+    """One-page placeholder PDF for a historical document (A.4 makes the real sample docs)."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4, invariant=1)
+    y = 800
+    lines = [
+        (16, vendor.name),
+        (10, f"VAT {vendor.vat_number} · IBAN {vendor.iban}"),
+        (10, ""),
+        (14, f"INVOICE {h['number']}   ·   {date:%d/%m/%Y}"),
+        (10, "Bill to: Monora Trading S.r.l., Via Nizza 150, 10126 Torino (IT)"),
+        (10, f"Shipment: {shipment.ref} ({shipment.origin} -> {shipment.destination})"),
+        (10, f"Service: {h['doc_type'].replace('_', ' ')} · {h.get('note', '')}"),
+        (10, ""),
+        (11, f"Net  EUR {h['net']:,.2f}"),
+        (11, f"VAT  EUR {h['vat']:,.2f}"),
+        (13, f"TOTAL EUR {total:,.2f}"),
+        (9, ""),
+        (9, "SAMPLE DOCUMENT · fictional company · generated by seed_demo"),
+    ]
+    for size, text in lines:
+        c.setFont("Helvetica-Bold" if size >= 13 else "Helvetica", size)
+        c.drawString(56, y, text)
+        y -= size + 10
+    c.showPage()
+    c.save()
+    return buf.getvalue()
