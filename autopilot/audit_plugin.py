@@ -47,14 +47,20 @@ def grounding_sources(llm_response) -> list[dict]:
 
 
 class AuditPlugin(BasePlugin):
-    def __init__(self, run):
+    """run: the AgentRun steps belong to (None in the adk web dev UI).
+    log: where steps go; default core.services.audit.log (evals pass an in-memory recorder)."""
+
+    def __init__(self, run, log=None):
         super().__init__(name="monora_audit")
         self.run = run
+        self._sink = log
         self._agent_event: dict[tuple[str, str], Any] = {}  # (invocation, agent) -> start event (parent)
         self._started: dict[tuple, float] = {}
         self._model: dict[tuple[str, str], str] = {}
 
     async def _log(self, action: str, actor_name: str, **kw):
+        if self._sink is not None:
+            return self._sink(action, actor_type="agent", actor_name=actor_name, run=self.run, **kw)
         return await sync_to_async(audit.log, thread_sensitive=True)(
             action, actor_type="agent", actor_name=actor_name, run=self.run, **kw
         )

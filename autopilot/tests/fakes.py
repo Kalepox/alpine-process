@@ -15,21 +15,22 @@ class FakeLlm(BaseLlm):
     """Returns the scripted texts in order; records what it was asked."""
 
     model: str = "fake-gemini"
-    responses: list[str | dict | list] = []
+    responses: list[str | dict | list | types.Part] = []
     requests: list = []
     grounding_urls: list[str] = []
 
     async def generate_content_async(self, llm_request, stream: bool = False) -> AsyncGenerator[LlmResponse, None]:
         self.requests.append(llm_request)
         text = self.responses.pop(0)
-        if not isinstance(text, str):
+        part = text if isinstance(text, types.Part) else None  # e.g. a scripted function call
+        if part is None and not isinstance(text, str):
             text = json.dumps(text)
         grounding = None
         if self.grounding_urls:
             grounding = types.GroundingMetadata(grounding_chunks=[
                 types.GroundingChunk(web=types.GroundingChunkWeb(uri=u, title="news")) for u in self.grounding_urls])
         yield LlmResponse(
-            content=types.Content(role="model", parts=[types.Part(text=text)]),
+            content=types.Content(role="model", parts=[part or types.Part(text=text)]),
             usage_metadata=types.GenerateContentResponseUsageMetadata(prompt_token_count=100, candidates_token_count=20),
             grounding_metadata=grounding,
         )

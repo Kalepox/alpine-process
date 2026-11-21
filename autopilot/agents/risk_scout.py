@@ -41,6 +41,20 @@ def _keep_sources(group: str):
     return after_model
 
 
+def build_structurer(group: str, model=MODEL) -> LlmAgent:
+    """News summary in state["news_<group>"] -> one RiskSignal per corridor of the group."""
+    return LlmAgent(
+        name=f"structurer_{group}", model=model, include_contents="none",
+        output_schema=list[RiskSignal], output_key=f"risk_{group}",
+        instruction=(
+            f"Classify each of these corridors from the news summary below: {_corridor_list(GROUPS[group])}.\n"
+            "Return one RiskSignal per corridor code, using the codes exactly. Do not invent numbers: "
+            "reopening_estimate_days and war_risk_pct only when the summary states them.\n\n"
+            f"NEWS SUMMARY:\n{{news_{group}}}"
+        ),
+    )
+
+
 def build_risk_scout(model=MODEL) -> ParallelAgent:
     """A fresh agent tree (an ADK agent can have only one parent). model: name or BaseLlm, or name -> model."""
     pick = model if callable(model) else (lambda _name: model)
@@ -57,16 +71,7 @@ def build_risk_scout(model=MODEL) -> ParallelAgent:
                 "for a corridor, say 'no reported disruption'."
             ),
         )
-        structurer = LlmAgent(
-            name=f"structurer_{group}", model=pick(f"structurer_{group}"), include_contents="none",
-            output_schema=list[RiskSignal], output_key=f"risk_{group}",
-            instruction=(
-                f"Classify each of these corridors from the news summary below: {_corridor_list(codes)}.\n"
-                "Return one RiskSignal per corridor code, using the codes exactly. Do not invent numbers: "
-                "reopening_estimate_days and war_risk_pct only when the summary states them.\n\n"
-                f"NEWS SUMMARY:\n{{news_{group}}}"
-            ),
-        )
+        structurer = build_structurer(group, pick(f"structurer_{group}"))
         scouts.append(SequentialAgent(name=f"scout_{group}", sub_agents=[searcher, structurer]))
     return ParallelAgent(name="risk_scout", sub_agents=scouts,
                          description="Scans news for corridor disruptions, one scout per corridor group.")

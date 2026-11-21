@@ -210,3 +210,20 @@ route_advisor then returns `reroute_or_wait` and its rationale. The pipeline cal
   - `Corridor.status_source` needs the value `weather`, and `AgentRun.pipeline` needs `monitor`.
   - Alert codes `WEATHER_RISK` and `OFF_ROUTE`; `ROAD_INCIDENT` isn't needed (road closures arrive as corridor alerts).
   - A `monitor` service in docker-compose.
+
+## B2.15 As built in H13–15 (evals, assistant, adk web)
+- **`manage.py eval_agents [--suite routes|monitor|risk]`** prints the pitch table and exits non-zero on a failure. Agent steps go to an in-memory recorder (`AuditPlugin(run, log=...)`), so evals never touch the audit trail.
+  - **routes (8):** Suez closed, 5-day deadline, Greenest, gold, reefer shelf life, DG tunnels, copper by sea, Red Sea Plan B. Each checks the solver invariants and that the advisor's pick is a valid option, using the real advisor when Gemini is configured.
+  - **monitor (3):** snow at Brenner → reroute; Bab-el-Mandeb closed 14 days → WAIT; closed 60 days → reroute.
+  - **risk (5):** canned news snippets → `risk_scout`'s structurer must classify them correctly. Skipped (not failed) without a key.
+  - Offline today, all 11 deterministic cases pass and 5 are skipped.
+- **`monora_assistant`** (root agent of `adk web` and of `pipelines.ask`) has these tools:
+  - `what_if_routes` (solver only, **saves nothing**)
+  - `get_risk_overlay`, `get_shipment`, `explain_option` (the "Why?" steps)
+  - `propose_replan` (proposes options for a manager)
+- **Changes from §B2.9:**
+  - `plan_routes_tool` became the read-only `what_if_routes`; real plans come from the Plan screen.
+  - `request_preapproval_for_option` was dropped, because replan already requests pre-approval for the recommended option.
+  - There's no `AgentTool(route_advisor)`: the advisor needs solver output, not a chat.
+  - Tools are async wrappers around sync ORM code, because Django refuses ORM calls inside ADK's event loop.
+- **`adk web autopilot/adk_app`** loads an `App` with `AuditPlugin(run=None)`, so dev-UI sessions are on the trail too.

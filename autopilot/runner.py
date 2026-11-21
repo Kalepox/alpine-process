@@ -31,14 +31,14 @@ def gemini_available() -> bool:
     return os.getenv("GOOGLE_API_KEY", "").strip() not in {"", "..."}
 
 
-def make_runner(agent: BaseAgent, run) -> Runner:
-    app = App(name=APP_NAME, root_agent=agent, plugins=[AuditPlugin(run)])
+def make_runner(agent: BaseAgent, run, log=None) -> Runner:
+    app = App(name=APP_NAME, root_agent=agent, plugins=[AuditPlugin(run, log)])
     return Runner(app=app, session_service=InMemorySessionService())
 
 
-async def run_agent(agent: BaseAgent, message: str, *, run, state: dict | None = None) -> Any:
+async def run_agent(agent: BaseAgent, message: str, *, run, state: dict | None = None, log=None) -> Any:
     """Run one agent to completion; return what it stored under its output_key (or the session state)."""
-    runner = make_runner(agent, run)
+    runner = make_runner(agent, run, log)
     try:
         session = await runner.session_service.create_session(
             app_name=APP_NAME, user_id=USER_ID, state={"run_id": str(getattr(run, "run_id", "")), **(state or {})},
@@ -53,6 +53,6 @@ async def run_agent(agent: BaseAgent, message: str, *, run, state: dict | None =
     return session.state.get(output_key) if output_key else dict(session.state)
 
 
-def run_agent_sync(agent: BaseAgent, message: str, *, run, state: dict | None = None) -> Any:
+def run_agent_sync(agent: BaseAgent, message: str, *, run, state: dict | None = None, log=None) -> Any:
     """Pipelines run in a worker thread with no event loop, so asyncio.run is safe here."""
-    return asyncio.run(run_agent(agent, message, run=run, state=state))
+    return asyncio.run(run_agent(agent, message, run=run, state=state, log=log))
