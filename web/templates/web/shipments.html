@@ -1,0 +1,197 @@
+{% extends "web/base.html" %}{% load ui %}
+{% block title %}{% if s %}{{ s.ref }}{% else %}Shipments{% endif %}{% endblock %}
+{% block head %}{% include "web/partials/map_assets.html" %}{% endblock %}
+{% block crumbs %}
+<nav class="flex items-center gap-1.5 text-sm"><a href="{% url 'web:shipments' %}" class="muted hover:text-ink-900 dark:hover:text-white">Shipments</a>{% if s %}{% icon "chevron-right" "size-3.5 text-ink-300" %}<span class="truncate font-medium">{{ s.ref }}</span>{% endif %}</nav>
+{% endblock %}
+{% block content %}
+<div class="mx-auto grid max-w-[1400px] grid-cols-1 gap-6 lg:grid-cols-[300px_1fr]">
+
+  <!-- List -->
+  <aside class="{% if s %}max-lg:hidden{% endif %}">
+    <div class="card overflow-hidden lg:sticky lg:top-24">
+      <div class="px-4 pb-2 pt-4"><p class="card-title">All shipments</p></div>
+      <ul class="max-h-[calc(100vh-12rem)] overflow-y-auto px-2 pb-2">
+        {% for x in shipments %}
+        <li>
+          <a href="{% url 'web:shipment' x.id %}" class="block rounded-xl px-3 py-3 transition {% if s and s.id == x.id %}bg-ink-100 dark:bg-white/[.06]{% else %}hover:bg-ink-50 dark:hover:bg-white/[.03]{% endif %}">
+            <div class="flex items-center justify-between gap-2">
+              <span class="flex min-w-0 items-center gap-2">
+                <span class="grid size-7 shrink-0 place-items-center rounded-lg bg-ink-100 text-ink-600 dark:bg-white/5 dark:text-ink-300">{% if x.mode == 'SEA' %}{% icon "ship" "size-3.5" %}{% elif x.mode == 'AIR' %}{% icon "plane" "size-3.5" %}{% else %}{% icon "truck" "size-3.5" %}{% endif %}</span>
+                <span class="truncate text-sm font-medium">{{ x.ref }}</span>
+              </span>
+              {% badge x.status %}
+            </div>
+            <p class="mt-1.5 truncate pl-9 text-xs muted">{{ x.cargo }} · {{ x.origin|truncatechars:16 }} → {{ x.destination|truncatechars:16 }}</p>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </aside>
+
+  {% if s %}
+  <section class="min-w-0 space-y-6">
+    <!-- Header -->
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      <div class="min-w-0">
+        <div class="flex flex-wrap items-center gap-2">{% badge s.status %}<span class="chip">{% if s.mode == 'SEA' %}{% icon "ship" "size-3" %} Sea{% elif s.mode == 'AIR' %}{% icon "plane" "size-3" %} Air{% else %}{% icon "truck" "size-3" %} Road{% endif %}</span>{% if s.live %}<span class="chip !text-emerald-700 dark:!text-emerald-400" title="Position of a real vessel from aisstream.io. Cargo is sample data."><span class="size-1.5 rounded-full bg-emerald-500"></span>Live AIS · {{ s.live.name|default:"vessel" }} · MMSI {{ s.live.mmsi }}</span>{% else %}<span class="font-mono text-xs muted">{{ s.tracker_id }}</span>{% endif %}</div>
+        <h1 class="mt-2 text-2xl font-semibold tracking-tight">{{ s.ref }}</h1>
+        <p class="mt-1 text-sm muted">{{ s.cargo }} · {{ s.quantity|num }} {{ s.unit }} · {{ s.cargo_value|compact_eur }} cargo value</p>
+      </div>
+      <div class="flex gap-2">
+        <a href="{% url 'web:audit' %}?shipment={{ s.id }}" class="btn btn-outline">{% icon "history" %} Audit</a>
+        {% if s.alerts or s.route_options %}
+          <a href="{% url 'web:reroute' s.id %}" class="btn btn-primary">{% icon "route" %} Route alternatives</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="flex gap-6 border-b border-ink-200 dark:border-white/[.07]">
+      <a href="{% url 'web:shipment' s.id %}" class="tab {% if tab != 'customs' %}active{% endif %}">Overview</a>
+      <a href="{% url 'web:shipment_customs' s.id %}" class="tab {% if tab == 'customs' %}active{% endif %}">Customs</a>
+    </div>
+
+    {% if tab == 'customs' %}
+      {% include "web/partials/customs_tab.html" %}
+    {% else %}
+
+    {% for a in s.alerts %}
+    <div class="flex items-start gap-3 rounded-2xl border p-4 {% if a.severity == 'block' %}border-rose-200 bg-rose-50 dark:border-rose-400/20 dark:bg-rose-500/[.07]{% else %}border-amber-200 bg-amber-50 dark:border-amber-400/20 dark:bg-amber-500/[.07]{% endif %}">
+      <span class="grid size-8 shrink-0 place-items-center rounded-lg {% if a.severity == 'block' %}bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300{% else %}bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300{% endif %}">{% icon "triangle-alert" %}</span>
+      <div class="flex-1">
+        <p class="text-sm font-medium">{{ a.code|humanize_code }}</p>
+        <p class="mt-0.5 text-sm text-ink-700 dark:text-ink-300">{{ a.message }}</p>
+      </div>
+      {% if a.code == 'CORRIDOR_CLOSED' %}<a href="{% url 'web:reroute' s.id %}" class="btn btn-primary btn-sm">See options</a>{% endif %}
+    </div>
+    {% endfor %}
+
+    <div class="grid grid-cols-1 gap-6 xl:grid-cols-5">
+      <div class="card overflow-hidden xl:col-span-3">
+        <div id="ship-map" class="h-[300px]"></div>
+      </div>
+      <div class="card p-5 xl:col-span-2">
+        <p class="card-title">Voyage</p>
+        <div class="mt-4 flex items-start gap-3">
+          <div class="flex flex-col items-center pt-1"><span class="size-2.5 rounded-full border-2 border-ink-900 dark:border-white"></span><span class="my-1 h-10 w-px bg-ink-200 dark:bg-white/10"></span><span class="size-2.5 rounded-full bg-ink-900 dark:bg-white"></span></div>
+          <div class="flex-1 space-y-4 text-sm">
+            <div><p class="font-medium">{{ s.origin }}</p><p class="text-xs muted">Departed {{ s.departed_at|date:"j M Y, H:i" }}</p></div>
+            <div><p class="font-medium">{{ s.destination }}</p><p class="text-xs muted">ETA {{ s.eta_current|date:"j M Y, H:i" }}{% if s.delay_hours > 0 %} · <span class="font-medium text-amber-600 dark:text-amber-400">+{{ s.delay_hours|days }} vs plan</span>{% endif %}</p></div>
+          </div>
+        </div>
+        <div class="mt-5">
+          <div class="flex justify-between text-xs muted"><span>Progress</span><span class="tabular-nums">{{ s.progress }}%</span></div>
+          <div class="mt-1.5 h-1.5 rounded-full bg-ink-100 dark:bg-white/5"><div class="h-full rounded-full bg-ink-900 dark:bg-white" style="width: {{ s.progress }}%"></div></div>
+        </div>
+        <dl class="mt-5 grid grid-cols-2 gap-4 border-t border-ink-100 pt-4 text-sm dark:border-white/5">
+          <div><dt class="text-xs muted">Route</dt><dd class="mt-0.5 flex items-center gap-1.5 font-medium">{% if s.port %}Sea to {{ s.port }}{% if s.legs|length > 1 %}, then truck{% endif %}{% elif s.corridor_obj %}{{ s.corridor_obj.name }}{% if s.corridor_obj.status != 'OPEN' %} {% badge s.corridor_obj.status %}{% endif %}{% else %}–{% endif %}</dd></div>
+          <div><dt class="text-xs muted">Delivery deadline</dt><dd class="mt-0.5 font-medium">{{ s.deadline|date:"j M" }}</dd></div>
+          <div><dt class="text-xs muted">Demurrage</dt><dd class="mt-0.5 font-medium tabular-nums">{{ s.demurrage_per_day|eur }}/day</dd></div>
+          <div><dt class="text-xs muted">Last position</dt><dd class="mt-0.5 font-medium">{{ s.position.ts|ago }} · {{ s.position.source }}</dd></div>
+        </dl>
+      </div>
+    </div>
+
+    <!-- Cost ledger -->
+    <div class="card">
+      <div class="card-head">
+        <div><p class="card-title">Cost ledger</p><p class="text-xs muted">Quoted when booked, projected after changes, actual when invoices are approved</p></div>
+        {% if s.overrun > 0 %}<span class="chip !text-amber-700 dark:!text-amber-400">{{ s.overrun|eur_signed }} vs quote</span>{% endif %}
+      </div>
+      <div class="overflow-x-auto">
+        <table class="tbl">
+          <thead><tr><th>Category</th><th class="!text-right">Quoted</th><th class="!text-right">Projected</th><th class="!text-right">Δ</th><th class="!text-right">Actual</th><th>Note</th></tr></thead>
+          <tbody>
+            {% for c in s.ledger %}
+            <tr>
+              <td class="font-medium">{{ c.label }}{% if c.preapproval %} <span class="ml-1 font-mono text-[11px] muted">{{ c.preapproval }}</span>{% endif %}</td>
+              <td class="money muted">{{ c.quoted|eur }}</td>
+              <td class="money">{{ c.projected|eur }}</td>
+              <td class="money {% if c.delta > 0 %}font-medium text-amber-600 dark:text-amber-400{% else %}text-ink-300 dark:text-ink-600{% endif %}">{% if c.delta %}{{ c.delta|eur_signed }}{% else %}–{% endif %}</td>
+              <td class="money">{% if c.actual is not None %}{{ c.actual|eur }}{% else %}<span class="text-ink-300 dark:text-ink-600">–</span>{% endif %}</td>
+              <td class="max-w-[240px] truncate text-xs muted">{{ c.note }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+          <tfoot>
+            <tr class="border-t border-ink-200 font-semibold dark:border-white/10">
+              <td class="px-4 py-3">Total</td>
+              <td class="money px-4 py-3">{{ s.ledger_totals.quoted|eur }}</td>
+              <td class="money px-4 py-3">{{ s.ledger_totals.projected|eur }}</td>
+              <td class="money px-4 py-3 {% if s.overrun > 0 %}text-amber-600 dark:text-amber-400{% endif %}">{{ s.overrun|eur_signed }}</td>
+              <td class="money px-4 py-3">{{ s.ledger_totals.actual|eur }}</td><td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
+      <!-- Expense documents -->
+      <div class="card">
+        <div class="card-head"><p class="card-title">Expense documents</p><a href="{% url 'web:inbox' %}" class="btn btn-ghost btn-sm -mr-2">Inbox</a></div>
+        <ul class="divide-y divide-ink-100 px-2 pb-2 dark:divide-white/5">
+          {% for d in s.expense_docs %}
+          <li><a href="{% url 'web:document' d.id %}" class="flex items-center gap-3 rounded-xl px-3 py-3 hover:bg-ink-50 dark:hover:bg-white/[.03]">
+            <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-ink-100 text-ink-500 dark:bg-white/5">{% icon "file-text" %}</span>
+            <span class="min-w-0 flex-1"><span class="block truncate text-sm font-medium">{{ d.number }} <span class="font-normal muted">· {{ d.type_label }}</span></span><span class="block truncate text-xs muted">{{ d.vendor.name }}</span></span>
+            <span class="text-sm font-medium tabular-nums">{{ d.total|eur }}</span>
+            {% badge d.status %}
+          </a></li>
+          {% empty %}
+          <li class="px-3 py-8 text-center text-sm muted">No expense documents yet.</li>
+          {% endfor %}
+        </ul>
+      </div>
+      <!-- Shipping docs -->
+      <div class="card">
+        <div class="card-head"><p class="card-title">Shipping documents</p><a href="{% url 'web:shipment_customs' s.id %}" class="btn btn-ghost btn-sm -mr-2">Customs</a></div>
+        <ul class="space-y-1 px-2 pb-3">
+          {% for d in s.shipping_docs %}
+          <li class="flex items-center justify-between rounded-xl px-3 py-2.5">
+            <span class="flex items-center gap-3 text-sm">
+              {% if d.status == 'VERIFIED' %}<span class="grid size-6 place-items-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-300">{% icon "check" "size-3.5" %}</span>
+              {% elif d.status == 'MISSING' or d.status == 'PROBLEM' %}<span class="grid size-6 place-items-center rounded-full bg-rose-100 text-rose-700 dark:bg-rose-400/15 dark:text-rose-300">{% icon "x" "size-3.5" %}</span>
+              {% else %}<span class="grid size-6 place-items-center rounded-full bg-ink-100 text-ink-500 dark:bg-white/10">{% icon "minus" "size-3.5" %}</span>{% endif %}
+              {{ d.label }}
+            </span>
+            {% badge d.status %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+
+    <!-- Activity -->
+    {% if s.audit %}
+    <div class="card">
+      <div class="card-head"><p class="card-title">Decisions</p><a href="{% url 'web:audit' %}?shipment={{ s.id }}" class="btn btn-ghost btn-sm -mr-2">Full trail</a></div>
+      <div class="px-5 pb-4">{% include "web/partials/timeline.html" with rows=s.audit %}</div>
+    </div>
+    {% endif %}
+    {% endif %}
+  </section>
+  {{ map_data|json_script:"map-data" }}
+  {% else %}
+  <section class="card grid min-h-[50vh] place-items-center p-10 text-center">
+    <div>
+      <span class="mx-auto grid size-12 place-items-center rounded-2xl bg-ink-100 text-ink-500 dark:bg-white/5">{% icon "ship" "size-5" %}</span>
+      <p class="mt-4 font-medium">Select a shipment</p>
+      <p class="mt-1 text-sm muted">Position, cost ledger, documents and customs for each shipment.</p>
+    </div>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+{% if s and tab != 'customs' %}
+<script>
+  window.addEventListener('load', () => {
+    const data = JSON.parse(document.getElementById('map-data').textContent);
+    MonoraMap.init(document.getElementById('ship-map'), data, { cooperative: true, selected: {{ s.id }}, padding: 36 });
+  });
+</script>
+{% endif %}
+{% endblock %}

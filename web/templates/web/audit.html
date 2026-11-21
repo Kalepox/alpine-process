@@ -1,0 +1,55 @@
+{% extends "web/base.html" %}{% load ui %}
+{% block title %}Audit trail{% endblock %}
+{% block crumbs %}<p class="text-sm font-medium">Audit trail</p>{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-[1200px] space-y-6">
+  <div>
+    <h1 class="text-2xl font-semibold tracking-tight">Audit trail</h1>
+    <p class="mt-1 text-sm muted">Who decided what, and when. Every decision made in Monora is recorded here and cannot be edited.</p>
+  </div>
+
+  <form method="get" class="card flex flex-wrap items-center gap-2 p-3">
+    <div class="relative min-w-[200px] flex-1">
+      <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-400">{% icon "search" "size-4" %}</span>
+      <input name="q" value="{{ f.q }}" placeholder="Search decisions" class="input pl-9">
+    </div>
+    <select name="person" class="input !w-auto" onchange="this.form.submit()">
+      <option value="">Everyone</option>
+      {% for p in people %}<option value="{{ p.username }}" {% if f.person == p.username %}selected{% endif %}>{{ p.name }}</option>{% endfor %}
+    </select>
+    <select name="shipment" class="input !w-auto" onchange="this.form.submit()">
+      <option value="">All shipments</option>
+      {% for s in shipments %}<option value="{{ s.id }}" {% if sid == s.id %}selected{% endif %}>{{ s.ref }}</option>{% endfor %}
+    </select>
+    {% if f.document %}<input type="hidden" name="document" value="{{ f.document }}"><span class="chip">Document #{{ f.document }} <a href="{% url 'web:audit' %}" class="hover:text-ink-900 dark:hover:text-white">{% icon "x" "size-3" %}</a></span>{% endif %}
+  </form>
+
+  <div class="card overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="tbl">
+        <thead><tr><th class="w-28">Date</th><th class="w-20">Time</th><th>Person</th><th>Decision</th><th>Details</th><th>Shipment</th><th>Document</th></tr></thead>
+        <tbody>
+          {% for e in rows %}
+          <tr>
+            <td class="whitespace-nowrap tabular-nums">{{ e.ts|date:"j M Y" }}</td>
+            <td class="whitespace-nowrap tabular-nums muted">{{ e.ts|date:"H:i:s" }}</td>
+            <td class="whitespace-nowrap">
+              <span class="flex items-center gap-2.5">
+                <span class="grid size-7 shrink-0 place-items-center rounded-full bg-ink-100 text-[10px] font-semibold text-ink-700 dark:bg-white/10 dark:text-ink-200">{{ e.person.initials }}</span>
+                <span><span class="block font-medium">{{ e.person.name }}</span>{% if e.person.role %}<span class="block text-xs capitalize muted">{{ e.person.role }}</span>{% endif %}</span>
+              </span>
+            </td>
+            <td class="whitespace-nowrap font-medium {% if 'Rejected' in e.label %}text-rose-600 dark:text-rose-400{% elif 'Approved' in e.label or 'Generated' in e.label %}text-emerald-700 dark:text-emerald-400{% endif %}">{{ e.label }}</td>
+            <td class="min-w-[240px] text-ink-700 dark:text-ink-300">{{ e.detail }}</td>
+            <td class="whitespace-nowrap">{% if e.shipment %}<a href="?shipment={{ e.shipment.id }}" class="hover:underline">{{ e.shipment.ref }}</a>{% else %}<span class="muted">–</span>{% endif %}</td>
+            <td class="whitespace-nowrap">{% if e.document %}<a href="{% url 'web:document' e.document.id %}" class="hover:underline">{{ e.document.number }}</a>{% else %}<span class="muted">–</span>{% endif %}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="7" class="!py-14 text-center muted">No decisions match.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

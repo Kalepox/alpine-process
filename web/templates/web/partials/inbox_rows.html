@@ -1,0 +1,29 @@
+{% load ui %}
+<tbody id="inbox-rows" {% if processing %}hx-get="{% url 'web:inbox_rows' %}{% if status %}?status={{ status }}{% endif %}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+  {% for d in docs %}
+  <tr class="row-link" data-href="{% url 'web:document' d.id %}">
+    <td>
+      <div class="flex items-center gap-3">
+        <span class="grid size-9 shrink-0 place-items-center rounded-xl {% if d.has_fraud %}bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300{% else %}bg-ink-100 text-ink-500 dark:bg-white/5 dark:text-ink-400{% endif %}">{% if d.has_fraud %}{% icon "shield-alert" %}{% else %}{% icon "file-text" %}{% endif %}</span>
+        <div class="min-w-0">
+          <a href="{% url 'web:document' d.id %}" class="block truncate font-medium hover:underline">{{ d.number }}</a>
+          <span class="block text-xs muted">{{ d.type_label }}</span>
+        </div>
+      </div>
+    </td>
+    <td class="max-w-[200px] truncate">{% if d.vendor %}{{ d.vendor.name }}{% else %}<span class="muted">{% if d.status == 'PROCESSING' %}Reading…{% else %}Unknown{% endif %}</span>{% endif %}</td>
+    <td class="max-w-[160px] truncate">{% if d.shipment %}{{ d.shipment.ref }}{% else %}<span class="muted">–</span>{% endif %}</td>
+    <td>
+      {% if d.status == 'PROCESSING' %}<span class="text-xs muted">Running checks…</span>
+      {% elif d.open_issues %}
+        <div class="flex flex-wrap gap-1">{% for i in d.open_issues %}<span class="rounded-md px-1.5 py-0.5 font-mono text-[11px] font-medium {% if i.severity == 'block' %}bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300{% else %}bg-amber-50 text-amber-800 dark:bg-amber-500/10 dark:text-amber-300{% endif %}">{{ i.code }}</span>{% endfor %}</div>
+      {% else %}<span class="inline-flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400">{% icon "check" "size-3.5" %} All passed</span>{% endif %}
+    </td>
+    <td class="money font-medium">{% if d.status == 'PROCESSING' %}<span class="inline-block h-3 w-16 animate-pulse rounded bg-ink-100 dark:bg-white/10"></span>{% else %}{{ d.total|eur }}{% endif %}</td>
+    <td>{% badge d.status %}</td>
+    <td class="text-xs muted">{{ d.created_at|ago }}</td>
+  </tr>
+  {% empty %}
+  <tr><td colspan="7" class="!py-14 text-center text-sm muted">No documents here.</td></tr>
+  {% endfor %}
+</tbody>
