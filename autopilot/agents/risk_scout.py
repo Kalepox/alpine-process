@@ -18,7 +18,7 @@ from google.adk.tools import google_search
 from autopilot.audit_plugin import grounding_sources
 from autopilot.domain.schemas import RiskSignal
 from autopilot.domain.tables import AIR, CORRIDORS, RAIL, ROAD, SEA
-from autopilot.runner import MODEL
+from autopilot.runner import call_config, gemini
 
 GROUPS: dict[str, list[str]] = {
     group: [code for code, (_, mode) in CORRIDORS.items() if mode == m]
@@ -41,10 +41,11 @@ def _keep_sources(group: str):
     return after_model
 
 
-def build_structurer(group: str, model=MODEL) -> LlmAgent:
+def build_structurer(group: str, model=None) -> LlmAgent:
     """News summary in state["news_<group>"] -> one RiskSignal per corridor of the group."""
     return LlmAgent(
-        name=f"structurer_{group}", model=model, include_contents="none",
+        name=f"structurer_{group}", model=model or gemini(), include_contents="none",
+        generate_content_config=call_config(),
         output_schema=list[RiskSignal], output_key=f"risk_{group}",
         instruction=(
             f"Classify each of these corridors from the news summary below: {_corridor_list(GROUPS[group])}.\n"
@@ -55,13 +56,14 @@ def build_structurer(group: str, model=MODEL) -> LlmAgent:
     )
 
 
-def build_risk_scout(model=MODEL) -> ParallelAgent:
+def build_risk_scout(model=None) -> ParallelAgent:
     """A fresh agent tree (an ADK agent can have only one parent). model: name or BaseLlm, or name -> model."""
-    pick = model if callable(model) else (lambda _name: model)
+    pick = model if callable(model) else (lambda _name: model or gemini())
     scouts = []
     for group, codes in GROUPS.items():
         searcher = LlmAgent(
             name=f"searcher_{group}", model=pick(f"searcher_{group}"), tools=[google_search],
+            generate_content_config=call_config(),
             after_model_callback=_keep_sources(group), output_key=f"news_{group}",
             instruction=(
                 "Search recent news (last 30 days, TODAY is in the user message) for disruptions of these "

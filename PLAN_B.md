@@ -123,20 +123,57 @@ route_advisor then returns `reroute_or_wait` and its rationale. The pipeline cal
 ```
 
 ## B2.8 Integration contract: what B needs from A and C
-**From A (send as one message at H0):**
-- v2 models: `RouteOption` multi-leg fields (`legs`, `geometry`, `days_p10/p90`, `score`, `possible_disruptions`, `kind`, `recommended`, `contingency`, `run`), `AgentRun`, and `AuditEvent` with `run/parent/input/output/sources/meta`. `Shipment.route`, `current_leg_index`, `progress_pct`, `request`.
-- New `Corridor` fields: `risk_score`, `p_close_30d`, `expected_duration_days`, `sources`. New road corridors: `MONT_BLANC`, `FREJUS`, `GOTTHARD` (+ the existing BRENNER). New `Alert` codes: `WEATHER_RISK`, `OFF_ROUTE`, `ROAD_INCIDENT`.
-- Services with the v2 signatures: `audit.start_run/finish_run/log`, `save_route_options(shipment, list[RouteOptionDTO], *, run, actor_name)`, `set_corridor_status(... , run)`, `raise_alert(..., run)` and `request_preapproval(..., run)`.
-- Update `core/tests/test_contract.py` to the v2 pipeline names. Extend `test_safety.FORBIDDEN_NAMES` with `approve_route`.
-- A `monitor` service in docker-compose: `python manage.py monitor_routes`.
+*Updated at H17 with everything B now calls. B codes against exactly this.*
 
-**For C:**
-- Pipelines to call in a thread: `plan_routes`, `replan`, `scan_disruptions`, `simulate_disruption`, `simulate_weather`, `ask`.
-- C polls `AgentRun.status` and lists the run's AuditEvents for the "agent is thinking" panel.
-- `RouteOption.score` / `possible_disruptions` / `contingency` drive the route cards and the "What if it closes?" toggle.
-- Monitor alerts appear in the live feed.
+**From A: blocker first**
+0. `requirements.txt`: add `networkx` and `searoute`, and pin `google-adk>=2.15,<3`. Without them the image crashes when the solver is imported.
 
-**Until A merges:** `autopilot/tests/fakes.py` provides in-memory fakes of the service functions. The domain layer is Django-free, so B is never blocked.
+**From A: models**
+1. **`RouteOption` (v2):**
+   - `run` FK, `kind` (ROUTE/WAIT), `label`
+   - `legs` JSON (`[{from_node,to_node,mode,km,days,corridors,geometry}]`) and `geometry`
+   - `transit_days`, `days_p10`, `days_p90`, `delay_days`
+   - `cost_breakdown` (CostCategory keys plus `CARRYING`, which is never invoiced), `landed_cost`, `co2_kg`, `risk_score`, `score` JSON
+   - `possible_disruptions` JSON, `contingency` FK to itself, `recommended`, `chosen`, `rationale`
+   - `break_even_days` (null), `infeasible_reason` (text)
+2. **`AgentRun`** as in plan.md §0.7, with `pipeline` values `plan_routes | scan_disruptions | replan | monitor | process_document | ask`.
+   - **`AuditEvent`** gains `run`, `parent`, `input`, `output`, `sources`, `meta`, `route_option` and `preapproval`.
+3. **`Shipment`:** `route` FK, `current_leg_index`, `progress_pct` and `request` JSON. Positions are reachable as `shipment.positions` and pre-approvals as `shipment.preapprovals`.
+4. **`Corridor`:** `risk_score`, `p_close_30d`, `expected_duration_days`, `war_risk_pct`, `sources`. `status_source` gains the value `weather`.
+   - Seed the codes in `autopilot/domain/tables.py::CORRIDORS`, including `MONT_BLANC`, `FREJUS` and `GOTTHARD`.
+5. **`Alert.Code`** gains `CORRIDOR_AT_RISK`, `WEATHER_RISK` and `OFF_ROUTE`.
+
+**From A: services** (B passes `run=` everywhere; `None` keyword values mean "leave unchanged")
+6. `audit.start_run(pipeline, *, trigger, triggered_by=None, shipment=None, document=None, input=None, model="", prompt_version="")`
+   - `audit.finish_run(run, status, summary="")`
+   - `audit.log(action, *, actor_type, actor_name, actor_user=None, run=None, parent=None, shipment=None, document=None, input=None, output=None, sources=None, meta=None, detail="")`
+   - `log` must accept `run=None` (adk web sessions and evals), hash the **full** payload and store about 4 KB of it.
+7. `shipments.save_route_options(shipment, list[RouteOptionDTO], *, run, actor_name) -> list[RouteOption]`
+   - It must return the options in the same order and map `contingency_key` to the `contingency` FK.
+8. `shipments.set_corridor_status(code, status, reason, source, *, risk_score=None, p_close_30d=None, expected_duration_days=None, war_risk_pct=None, sources=None, actor_name, run=None)`
+9. `shipments.raise_alert(shipment, code, severity, message, *, actor_name, run=None)`, idempotent per open (shipment, code).
+10. `shipments.update_shipment_request(shipment, request: dict, *, actor_name, run)` (new). It keeps the request parsed from free text.
+11. `approvals.request_preapproval(shipment, route_option, amount_cap, categories, reason, *, requested_by, run=None)`
+12. `expenses.record_extraction(doc, extracted: dict, *, vendor, shipment, category, summary, actor_name, run)` (new).
+    - Plus the v1 `set_doc_status`, `create_issues` and `request_payment`.
+
+**From A: tests, data, ops**
+13. `core/tests/test_contract.py`: switch to the v2 pipeline names (`plan_routes, replan, scan_disruptions, simulate_disruption, monitor_routes, simulate_weather, process_document, ask`). B then drops the `propose_reroutes` and `draft_weekly_report` aliases.
+    - `test_safety.FORBIDDEN_NAMES`: add `approve_route`.
+14. `sample_data/MANIFEST.md`, one line per file: `- war_risk.pdf: OVER_PREAPPROVAL` or `- freight_ok.pdf: clean`. The war-risk invoice needs a line item that says "war risk".
+15. docker-compose: add a `monitor` service running `python manage.py monitor_routes` (same image as `web`).
+
+**For C**
+- **Pipelines to call in a thread** (`threading.Thread`, never from an async view):
+  - `plan_routes(shipment_id, user_id)` and `replan(shipment_id, user_id)`
+  - `scan_disruptions(user_id)`, `simulate_disruption(code, status, days, user_id)`, `simulate_weather(shipment_id, "snow"|"wind"|"storm", user_id)`
+  - `monitor_routes()` for a "check now" button, plus `ask(task, user_id)` and `process_document(id)`
+- Poll `AgentRun.status` and list its `AuditEvent`s for the "agent is thinking" panel.
+- **Route cards:**
+  - Show `label`, days (`transit_days` with `days_p10`–`days_p90`), `score.reliability_pct`, `risk_score`, `co2_kg` and `landed_cost`, plus `rationale`.
+  - The possible disruptions plus `contingency` drive "What if it closes?".
+  - Replan cards add `kind` (WAIT), `delay_days` and `break_even_days`. When `infeasible_reason` is set, show the card greyed out.
+- Pass `Shipment.request` either as a `RoutingRequest` dict (form) or as `{"text": ...}` with optional form fields (free text).
 
 ## B2.9 Step-by-step execution plan (hackathon clock, aligned with plan.md)
 | Slot | Step | Files | Done when |
@@ -244,3 +281,38 @@ route_advisor then returns `reroute_or_wait` and its rationale. The pipeline cal
 - **A additions:**
   - A service `expenses.record_extraction(doc, extracted, *, vendor, shipment, category, summary, actor_name, run)` that writes the ExpenseDocument fields from the extraction.
   - A sample war-risk invoice whose line items say "war risk", so it categorizes as WAR_RISK.
+
+## B2.17 As built in H17–18 (hardening) and demo runbook
+**Bounded agents**
+- Every agent uses `runner.gemini()`, which retries 408, 429 and 5xx errors with backoff (3 attempts), and `call_config()`, a 60 s HTTP timeout per call.
+- `run_agent` caps a whole agent run at `AGENT_TIMEOUT_S` (default 90 s) and `risk_scout` at 180 s, so a slow model can never hang a pipeline thread.
+- Tested with a deliberately slow fake model: the advisor times out, the fallback is used, and the solver's options survive.
+- The `Workflow` migration (§B2.12) is deliberately **not** done: the deprecated agents work and are tested, and migrating now would risk the demo for no visible gain.
+
+**What still works when something is missing**
+
+| Missing | Effect |
+|---|---|
+| Gemini key or network | Planning, replanning, WAIT and break-even, the monitor and all deterministic evals still work. The advisor uses its template rationale, free text needs the form, `scan_disruptions` is skipped (use Simulate), and expense intake fails cleanly (FAILED, retry later). |
+| Open-Meteo | Logged as `signal.weather.error`; the corridor and tracking detectors keep running. |
+| `DEMO_MODE=replay` | Weather is skipped and the monitor ticks every 20 s; drive weather with `simulate_weather`. |
+| searoute | Never needed at runtime for planning: the sea legs are cached. Live voyages for a ship at sea are computed locally, with no network. |
+
+**Demo runbook (B's part, matches plan.md §0.4)**
+```
+python manage.py eval_agents                     # screenshot the table (risk/docs rows need the key)
+python manage.py monitor_routes --interval 20 &  # the watcher, next to collectors
+# 2. Plan: /plan "40 t copper cathodes Antofagasta -> Milan plant, needed by Mar 3"
+#    -> R1 sea via Panama, flight shown but not recommended; marco approves
+# 3. Disruption: Risk -> Simulate BAB_EL_MANDEB CLOSED 14
+#    -> replan for MT Aurelia Grace: WAIT recommended, "waiting wins if it reopens within 18 days", Cape as R1
+#    (change it to 60 days to show the flip to the Cape)
+# 3b. Road: simulate_weather(<truck>, "snow") -> Brenner restricted -> truck rerouted via another pass
+# 5. Expenses: war-risk invoice > cap -> OVER_PREAPPROVAL; changed IBAN -> fraud block
+# 6. Audit: "Why?" on the decision -> solver.run (graph version, overlay hash) -> advisor.verdict -> approval
+adk web autopilot/adk_app                        # optional: assistant tool calls in the ADK dev UI
+```
+
+**Still open (needs the key or A)**
+- Live Gemini check of `intent_agent`, `route_advisor`, `risk_scout` and the expense agents: put `GOOGLE_API_KEY` in `.env` and run `eval_agents` (the risk and docs rows).
+- The ORM entrypoints (`plan_routes`, `replan`, `scan`/`simulate`, `monitor_routes`, `process_document`) run end to end once A ships §B2.8. Their pure cores are tested.

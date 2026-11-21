@@ -13,7 +13,7 @@ from google.adk.agents import LlmAgent
 
 from autopilot.domain.schemas import AdvisorVerdict, RouteOptionDTO, RoutingRequest, Tradeoff
 from autopilot.domain.tables import CORRIDORS
-from autopilot.runner import MODEL
+from autopilot.runner import call_config, gemini
 
 PLAN_B_THRESHOLD = 0.15  # a recommended route whose riskiest corridor is likelier than this must show its Plan B
 
@@ -39,7 +39,8 @@ Rules:
 
 route_advisor = LlmAgent(
     name="route_advisor",
-    model=MODEL,
+    model=gemini(),
+    generate_content_config=call_config(),
     description="Recommends one of the solver's route options and explains the trade-offs.",
     instruction=INSTRUCTION,
     output_schema=AdvisorVerdict,

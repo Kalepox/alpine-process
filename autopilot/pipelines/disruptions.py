@@ -17,6 +17,7 @@ from autopilot.domain.schemas import RiskAssessment, RiskSignal, SourceRef
 from autopilot.domain.tables import CORRIDORS
 from autopilot.runner import MODEL, PROMPT_VERSION, gemini_available, run_agent_sync
 
+SCAN_TIMEOUT_S = 180
 P_CHANGE = 0.05  # smaller probability moves are noise, not a change
 STATUSES = {"OPEN", "RESTRICTED", "CLOSED"}
 
@@ -70,7 +71,8 @@ def scan_disruptions(user_id: int | None = None) -> list[str]:
         audit.finish_run(run, "OK", summary="skipped: no Gemini")
         return []
     try:
-        state = run_agent_sync(build_risk_scout(), f"TODAY: {timezone.localdate().isoformat()}", run=run)
+        state = run_agent_sync(build_risk_scout(), f"TODAY: {timezone.localdate().isoformat()}", run=run,
+                               timeout_s=SCAN_TIMEOUT_S)  # 8 model calls, partly in parallel
         found = changes(assessments_from_state(state, run=run), RiskOverlay.from_rows(Corridor.objects.all()))
         for a in found:
             shipments.set_corridor_status(

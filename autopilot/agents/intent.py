@@ -5,7 +5,7 @@ from google.adk.agents import LlmAgent
 
 from autopilot.domain.schemas import CargoClass, Preset, RoutingRequest
 from autopilot.domain.tables import LOCATIONS
-from autopilot.runner import MODEL
+from autopilot.runner import call_config, gemini
 
 _PLACES = ", ".join(sorted(loc.name for loc in LOCATIONS.values()))
 
@@ -32,7 +32,8 @@ Fields already given as FORM in the message are authoritative: copy them unchang
 
 intent_agent = LlmAgent(
     name="intent_agent",
-    model=MODEL,
+    model=gemini(),
+    generate_content_config=call_config(),
     description="Turns a plain-language shipping order into solver parameters.",
     instruction=INSTRUCTION,
     output_schema=RoutingRequest,

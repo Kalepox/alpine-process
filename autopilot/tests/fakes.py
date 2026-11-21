@@ -1,6 +1,7 @@
 """Test doubles: a scripted Gemini and an in-memory audit service (until A's v2 services land)."""
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from types import SimpleNamespace
@@ -18,9 +19,12 @@ class FakeLlm(BaseLlm):
     responses: list[str | dict | list | types.Part] = []
     requests: list = []
     grounding_urls: list[str] = []
+    delay_s: float = 0.0  # simulate a slow model
 
     async def generate_content_async(self, llm_request, stream: bool = False) -> AsyncGenerator[LlmResponse, None]:
         self.requests.append(llm_request)
+        if self.delay_s:
+            await asyncio.sleep(self.delay_s)
         text = self.responses.pop(0)
         part = text if isinstance(text, types.Part) else None  # e.g. a scripted function call
         if part is None and not isinstance(text, str):

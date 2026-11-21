@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from google.adk.agents import LlmAgent
 
-from autopilot.runner import MODEL
+from autopilot.runner import call_config, gemini
 from autopilot.tools import ASSISTANT_TOOLS
 
 INSTRUCTION = """You are Monora, the logistics back-office assistant. You answer questions from operations
@@ -22,7 +22,8 @@ Rules:
 
 monora_assistant = LlmAgent(
     name="monora_assistant",
-    model=MODEL,
+    model=gemini(),
+    generate_content_config=call_config(),
     description="Answers questions about shipments, routes and risks using read-only tools.",
     instruction=INSTRUCTION,
     tools=ASSISTANT_TOOLS,

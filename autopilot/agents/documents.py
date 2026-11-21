@@ -10,11 +10,12 @@ from pydantic import BaseModel, Field
 
 from autopilot.agents.advisor import ungrounded_numbers
 from autopilot.domain.schemas import ExtractedExpense, IssueDraft
-from autopilot.runner import MODEL
+from autopilot.runner import call_config, gemini
 
 doc_intake = LlmAgent(
     name="doc_intake",
-    model=MODEL,
+    model=gemini(),
+    generate_content_config=call_config(),
     description="Reads an expense document (invoice, bill, payment order) into structured fields.",
     instruction="""Extract the fields of the attached logistics expense document.
 - doc_type: freight_bill, insurance_invoice, demurrage_bill, inspection_invoice, customs, port, payment_order or other.
@@ -41,7 +42,8 @@ class DocExplanation(BaseModel):
 
 doc_explainer = LlmAgent(
     name="doc_explainer",
-    model=MODEL,
+    model=gemini(),
+    generate_content_config=call_config(),
     description="Explains rule findings on an expense document in plain language.",
     instruction="""You receive an expense document's extracted fields and the issues found by deterministic rules.
 Write a short summary and, for EACH issue (same codes, same order), a clear message and suggested action
