@@ -9,6 +9,7 @@ admin.site.site_title = "Monora"
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("accounts/", include("django.contrib.auth.urls")),
+    path("api/", include("integrations.urls")),  # A: /api/live/ (before web.urls, so it wins)
     path("", include("web.urls")),
 ]
 
