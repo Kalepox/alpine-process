@@ -1,0 +1,258 @@
+{% load static ui %}<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Monora{% endblock %} · Monora</title>
+  <script>
+    // set theme before paint
+    try { const t = localStorage.getItem('monora-theme'); if (t !== 'light') document.documentElement.classList.add('dark'); } catch (e) {}
+  </script>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='none'/%3E%3Cpath d='M4 22c4 0 4-12 8-12s3 12 7 12 4-7 7-7' fill='none' stroke='%2334497c' stroke-width='3.2' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: {
+        fontFamily: { sans: ['Geist', 'ui-sans-serif', 'system-ui', 'sans-serif'], mono: ['Geist Mono', 'ui-monospace', 'monospace'] },
+        colors: {
+          ink: { 50:'#f5f6f9', 100:'#eceef3', 200:'#dde1e9', 300:'#c0c6d2', 400:'#8f98aa', 500:'#687187', 600:'#4d5568', 700:'#384052', 800:'#222939', 900:'#131a2a', 950:'#0a0f1b' },
+          brand: { 50:'#eff2f8', 100:'#dde3ef', 200:'#bcc7de', 300:'#94a4c6', 400:'#6f82ab', 500:'#34497c', 600:'#2c3f6c', 700:'#25355b', 800:'#1f2c4b', 900:'#19233c' },
+          night: { 900:'#090e1a', 850:'#0e1524', 800:'#131c2f', 700:'#1a2439', 600:'#222e47' },
+        },
+        boxShadow: { soft: '0 1px 2px rgba(9,14,26,.05), 0 1px 1px rgba(9,14,26,.04)', pop: '0 16px 44px -12px rgba(4,7,15,.5)' },
+      } }
+    }
+  </script>
+  <style type="text/tailwindcss">
+    @layer base {
+      body { @apply bg-ink-50 text-ink-900 antialiased dark:bg-night-900 dark:text-ink-100; font-feature-settings: "ss01", "cv11"; }
+      ::selection { @apply bg-brand-200 dark:bg-brand-700/60; }
+    }
+    @layer components {
+      .card { @apply rounded-2xl border border-ink-200/80 bg-white shadow-soft dark:border-white/[.07] dark:bg-night-850; }
+      .card-head { @apply flex items-center justify-between gap-3 px-5 pt-4 pb-3; }
+      .card-title { @apply text-sm font-semibold text-ink-900 dark:text-ink-100; }
+      .muted { @apply text-ink-500 dark:text-ink-400; }
+      .eyebrow { @apply text-[11px] font-medium uppercase tracking-[.08em] text-ink-400 dark:text-ink-400; }
+      .btn { @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl px-3.5 h-9 text-sm font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 disabled:opacity-50 disabled:pointer-events-none; }
+      .btn-sm { @apply h-8 px-3 text-[13px] rounded-lg; }
+      .btn-lg { @apply h-11 px-5 text-[15px]; }
+      .btn-primary { @apply bg-ink-900 text-white hover:bg-ink-800 dark:bg-brand-500 dark:text-white dark:hover:bg-brand-400; }
+      .btn-brand { @apply bg-brand-600 text-white hover:bg-brand-700; }
+      .btn-outline { @apply border border-ink-200 bg-white text-ink-800 hover:bg-ink-50 dark:border-white/10 dark:bg-white/[.03] dark:text-ink-100 dark:hover:bg-white/[.07]; }
+      .btn-ghost { @apply text-ink-600 hover:bg-ink-100 hover:text-ink-900 dark:text-ink-300 dark:hover:bg-white/5 dark:hover:text-white; }
+      .btn-danger { @apply bg-rose-600 text-white hover:bg-rose-700; }
+      .btn-danger-soft { @apply bg-rose-50 text-rose-700 hover:bg-rose-100 dark:bg-rose-500/10 dark:text-rose-300 dark:hover:bg-rose-500/20; }
+      .input { @apply h-9 w-full rounded-xl border border-ink-200 bg-white px-3 text-sm placeholder:text-ink-400 focus:border-brand-400 focus:outline-none focus:ring-4 focus:ring-brand-500/10 dark:border-white/10 dark:bg-night-800 dark:placeholder:text-ink-500; }
+      textarea.input { @apply h-auto py-2; }
+      .tbl { @apply w-full text-sm; }
+      .tbl th { @apply px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-[.06em] text-ink-400 dark:text-ink-500; }
+      .tbl td { @apply px-4 py-3 border-t border-ink-100 dark:border-white/[.05]; }
+      .tbl tbody tr { @apply transition-colors; }
+      .tbl tbody tr.row-link:hover { @apply bg-ink-50/70 cursor-pointer dark:bg-white/[.025]; }
+      .money { @apply text-right tabular-nums whitespace-nowrap; }
+      .nav-item { @apply flex items-center gap-3 rounded-xl px-3 py-2 text-[13.5px] font-medium text-ink-600 transition hover:bg-white hover:text-ink-900 dark:text-ink-200 dark:hover:bg-white/[.06] dark:hover:text-white; }
+      .nav-item.active { @apply bg-white text-ink-900 shadow-soft ring-1 ring-ink-200/80 dark:bg-white/[.11] dark:text-white dark:ring-white/[.08]; }
+      .nav-item i, .nav-item svg { @apply size-[18px] shrink-0 opacity-80; }
+      .chip { @apply inline-flex items-center gap-1.5 text-xs font-medium text-ink-500 dark:text-ink-300; }
+      .chip-btn { @apply inline-flex items-center gap-1.5 rounded-lg border border-ink-200 bg-white px-2.5 py-1 text-xs font-medium text-ink-600 dark:border-white/10 dark:bg-white/[.03] dark:text-ink-300; }
+      .tab { @apply relative px-1 pb-3 text-sm font-medium text-ink-500 hover:text-ink-900 dark:text-ink-400 dark:hover:text-white; }
+      .tab.active { @apply text-ink-900 dark:text-white after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:rounded-full after:bg-ink-900 dark:after:bg-white; }
+      .seg { @apply inline-flex rounded-xl bg-ink-100 p-1 dark:bg-white/5; }
+      .seg a, .seg button { @apply rounded-lg px-3 py-1.5 text-[13px] font-medium text-ink-500 hover:text-ink-900 dark:text-ink-400 dark:hover:text-white; }
+      .seg .on { @apply bg-white text-ink-900 shadow-soft dark:bg-night-700 dark:text-white; }
+      .autopilot { @apply rounded-2xl border border-brand-100 bg-brand-50/60 dark:border-brand-400/15 dark:bg-brand-400/[.06]; }
+      .autopilot-label { @apply inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[.08em] text-brand-700 dark:text-brand-300; }
+      .prose-report h2 { @apply mt-7 mb-2 text-base font-semibold first:mt-0; }
+      .prose-report p { @apply my-2 leading-relaxed text-ink-700 dark:text-ink-300; }
+      .prose-report ul { @apply my-2 list-disc space-y-1 pl-5 text-ink-700 dark:text-ink-300; }
+      .prose-report strong { @apply font-semibold text-ink-900 dark:text-white; }
+      .prose-report table { @apply my-3 w-full overflow-hidden rounded-xl text-sm ring-1 ring-ink-200 dark:ring-white/10; }
+      .prose-report th { @apply bg-ink-50 px-3 py-2 text-xs font-medium text-ink-500 dark:bg-white/5; }
+      .prose-report td { @apply border-t border-ink-100 px-3 py-2 tabular-nums dark:border-white/5; }
+    }
+  </style>
+  <style>
+    /* ---- soft transitions ---------------------------------------------------- */
+    @view-transition { navigation: auto; }                       /* cross-page fade (Chrome, Safari 18+) */
+    ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .28s; animation-timing-function: cubic-bezier(.2,.7,.2,1); }
+    ::view-transition-old(root) { animation-name: vt-out; }
+    ::view-transition-new(root) { animation-name: vt-in; }
+    #sidebar { view-transition-name: sidebar; }
+    header.sticky { view-transition-name: topbar; }
+    ::view-transition-group(sidebar), ::view-transition-group(topbar) { animation: none; }
+    @keyframes vt-out { to { opacity: 0; transform: translateY(-4px); } }
+    @keyframes vt-in { from { opacity: 0; transform: translateY(6px); } }
+
+    main > * { animation: page-in .35s cubic-bezier(.2,.7,.2,1) both; }   /* fallback when view transitions are not supported */
+    @supports (view-transition-name: a) { main > * { animation: none; } }
+    @keyframes page-in { from { opacity: 0; transform: translateY(6px); } }
+
+    .btn, .nav-item, .card, .tab, .seg a, .seg button, .input, .chip-btn, a, button { transition-duration: .22s !important; transition-timing-function: cubic-bezier(.2,.7,.2,1) !important; }
+
+    .pop-in { animation: pop-in .22s cubic-bezier(.2,.7,.2,1) both; }
+    @keyframes pop-in { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+    dialog[open] { animation: pop-in .22s cubic-bezier(.2,.7,.2,1) both; }
+    dialog[open]::backdrop { animation: fade-in .22s ease both; }
+    @keyframes fade-in { from { opacity: 0; } }
+    .toast { animation: toast-in .3s cubic-bezier(.2,.7,.2,1) both; }
+    @keyframes toast-in { from { opacity: 0; transform: translateY(-10px); } }
+
+    html.theme-anim, html.theme-anim * { transition: background-color .35s ease, border-color .35s ease, color .35s ease !important; }
+    @media (prefers-reduced-motion: reduce) { *, ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; transition: none !important; } }
+  </style>
+  <script src="https://unpkg.com/htmx.org@2.0.3/dist/htmx.min.js"></script>
+  <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+  {% block head %}{% endblock %}
+</head>
+<body class="h-full" hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+{% block body %}
+<div class="flex min-h-full">
+
+  <!-- Sidebar -->
+  <aside id="sidebar" class="fixed inset-y-0 left-0 z-40 flex w-64 -translate-x-full flex-col border-r border-ink-200/70 bg-ink-50 px-3 pb-4 transition-transform duration-200 lg:translate-x-0 dark:border-white/[.09] dark:bg-night-700">
+    <a href="{% url 'web:overview' %}" class="flex h-16 items-center gap-2.5 px-3">
+      <svg viewBox="0 0 24 24" class="size-7 text-ink-900 dark:text-brand-400" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17c3.2 0 3.2-10 6.5-10s2.2 10 5.5 10 3.2-6 5.5-6"/></svg>
+      <span class="text-[17px] font-semibold tracking-tight">Monora</span>
+    </a>
+
+    {% with u=request.resolver_match.url_name %}
+    <nav class="mt-2 flex-1 space-y-6 overflow-y-auto">
+      <div class="space-y-0.5">
+        <p class="eyebrow px-3 pb-1.5">Operate</p>
+        <a href="{% url 'web:overview' %}" class="nav-item {% if u == 'overview' or u == 'reroute' %}active{% endif %}">{% icon "layout-grid" %} Overview</a>
+        <a href="{% url 'web:map' %}" class="nav-item {% if u == 'map' %}active{% endif %}">{% icon "map" %} Map</a>
+        <a href="{% url 'web:plan' %}" class="nav-item {% if u == 'plan' %}active{% endif %}">{% icon "route" %} Plan route</a>
+        <a href="{% url 'web:shipments' %}" class="nav-item {% if u in 'shipments shipment shipment_customs' %}active{% endif %}">{% icon "ship" %} Shipments</a>
+      </div>
+      <div class="space-y-0.5">
+        <p class="eyebrow px-3 pb-1.5">Expense checks</p>
+        <a href="{% url 'web:inbox' %}" class="nav-item {% if u in 'inbox document' %}active{% endif %}">{% icon "inbox" %} Inbox
+          {% if counts.review %}<span class="ml-auto rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-400/15 dark:text-amber-300">{{ counts.review }}</span>{% endif %}</a>
+        <a href="{% url 'web:approvals' %}" class="nav-item {% if u == 'approvals' %}active{% endif %}">{% icon "circle-check" %} Approvals
+          {% with n=counts.payments|add:counts.preapprovals|add:counts.reports %}{% if n %}<span class="ml-auto rounded-full bg-ink-900 px-2 py-0.5 text-[11px] font-semibold text-white dark:bg-brand-500 dark:text-white">{{ n }}</span>{% endif %}{% endwith %}</a>
+        <a href="{% url 'web:export' %}" class="nav-item {% if u == 'export' %}active{% endif %}">{% icon "landmark" %} Export</a>
+        <a href="{% url 'web:reports' %}" class="nav-item {% if u in 'reports report' %}active{% endif %}">{% icon "file-text" %} Weekly report</a>
+      </div>
+      <div class="space-y-0.5">
+        <p class="eyebrow px-3 pb-1.5">Control</p>
+        <a href="{% url 'web:audit' %}" class="nav-item {% if u == 'audit' %}active{% endif %}">{% icon "history" %} Audit trail</a>
+      </div>
+    </nav>
+    {% endwith %}
+
+    <!-- User -->
+    <div class="relative" data-menu>
+      <button type="button" data-menu-btn class="flex w-full items-center gap-3 rounded-xl p-2 text-left hover:bg-white dark:hover:bg-white/5">
+        <span class="grid size-9 place-items-center rounded-full bg-ink-200 text-xs font-semibold text-ink-700 dark:bg-white/10 dark:text-ink-200">{{ me.initials }}</span>
+        <span class="min-w-0 flex-1">
+          <span class="block truncate text-sm font-medium">{{ me.name }}</span>
+          <span class="block text-xs capitalize muted">{{ me.role }}</span>
+        </span>
+        {% icon "chevrons-up-down" "size-4 text-ink-400" %}
+      </button>
+      <div data-menu-panel class="absolute bottom-full left-0 right-0 mb-2 hidden rounded-2xl border border-ink-200 bg-white p-1.5 shadow-pop dark:border-white/10 dark:bg-night-800">
+        <p class="px-2.5 pb-1 pt-1.5 eyebrow">Switch user (demo)</p>
+        <form method="post" action="{% url 'web:switch_user' %}">{% csrf_token %}
+          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+          <button name="username" value="elena" class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-sm hover:bg-ink-50 dark:hover:bg-white/5">Elena · ops {% if me.username == 'elena' %}{% icon "check" "size-4" %}{% endif %}</button>
+          <button name="username" value="marco" class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-sm hover:bg-ink-50 dark:hover:bg-white/5">Marco · manager {% if me.username == 'marco' %}{% icon "check" "size-4" %}{% endif %}</button>
+        </form>
+        <div class="my-1 h-px bg-ink-100 dark:bg-white/5"></div>
+        <form method="post" action="{% url 'web:demo_reset' %}" data-confirm="Reset all demo data to the starting state?" data-confirm-ok="Reset">{% csrf_token %}
+          <button class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm hover:bg-ink-50 dark:hover:bg-white/5">{% icon "rotate-ccw" %} Reset demo data</button>
+        </form>
+        <a href="{% url 'web:logout' %}" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm hover:bg-ink-50 dark:hover:bg-white/5">{% icon "log-out" %} Sign out</a>
+      </div>
+    </div>
+  </aside>
+  <div id="sidebar-scrim" class="fixed inset-0 z-30 hidden bg-ink-950/30 backdrop-blur-[1px] lg:hidden"></div>
+
+  <!-- Main -->
+  <div class="flex min-w-0 flex-1 flex-col lg:pl-64">
+    <header class="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-ink-200/70 bg-ink-50/85 px-4 backdrop-blur-md sm:px-6 lg:px-8 dark:border-white/[.06] dark:bg-night-900/80">
+      <button type="button" id="sidebar-open" class="btn btn-ghost -ml-2 px-2 lg:hidden" aria-label="Open menu">{% icon "menu" "size-5" %}</button>
+      <div class="min-w-0 flex-1">
+        {% block crumbs %}{% endblock %}
+      </div>
+      {% if ais.connected %}
+      <span id="ais-badge" class="hidden items-center gap-2 sm:inline-flex chip" title="Vessel positions stream live from aisstream.io. Cargo and all money figures are sample data.">
+        <span class="relative flex size-2"><span class="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-60"></span><span class="relative inline-flex size-2 rounded-full bg-emerald-500"></span></span>
+        Live AIS · <span data-ais-count class="tabular-nums">{{ ais.vessels }}</span> vessels · sample financials
+      </span>
+      {% else %}
+      <span id="ais-badge" class="hidden items-center gap-2 sm:inline-flex chip" title="{% if ais.enabled %}Connecting to aisstream.io{% if ais.error %}: {{ ais.error }}{% endif %}{% else %}No AISSTREAM_API_KEY set: showing sample positions.{% endif %}">
+        <span class="size-2 rounded-full {% if ais.enabled %}bg-amber-400{% else %}bg-ink-300{% endif %}"></span>
+        {% if ais.enabled %}Connecting to AIS…{% else %}Sample positions{% endif %} · sample financials
+      </span>
+      {% endif %}
+      {% if demo_mode == "replay" %}<span class="chip !text-amber-700 dark:!text-amber-400">Replay</span>{% endif %}
+      <button type="button" id="theme-toggle" class="btn btn-ghost px-2" aria-label="Toggle theme">
+        <i data-lucide="moon" class="size-[18px] dark:hidden"></i><i data-lucide="sun" class="hidden size-[18px] dark:block"></i>
+      </button>
+    </header>
+
+    <main class="flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+
+<!-- Ask Monora -->
+<button type="button" id="ask-open" class="fixed bottom-5 right-5 z-30 inline-flex h-11 items-center gap-2 rounded-full bg-ink-900 pl-4 pr-5 text-sm font-medium text-white shadow-pop transition hover:-translate-y-0.5 dark:bg-brand-500 dark:text-white">
+  {% icon "message-square-text" "size-[18px]" %} Assign a task
+</button>
+<div id="ask-panel" class="fixed bottom-5 right-5 z-50 hidden w-[calc(100vw-2.5rem)] max-w-md">
+  <div class="card overflow-hidden shadow-pop">
+    <div class="flex items-center justify-between border-b border-ink-100 px-5 py-3.5 dark:border-white/5">
+      <div>
+        <p class="text-sm font-semibold">Assign a task</p>
+        <p class="text-xs muted">Monora agent · Google ADK. It can look things up and request approvals, never approve.</p>
+      </div>
+      <button type="button" id="ask-close" class="btn btn-ghost -mr-2 px-2" aria-label="Close">{% icon "x" %}</button>
+    </div>
+    <div id="ask-log" class="max-h-[50vh] space-y-3 overflow-y-auto px-5 py-4 empty:hidden"></div>
+    <div class="px-5 pb-1 pt-3 flex flex-wrap gap-1.5" id="ask-suggestions">
+      <button type="button" class="chip-btn hover:bg-ink-50 dark:hover:bg-white/5" data-ask>What happens to Aurelia Grace if the Red Sea closes?</button>
+      <button type="button" class="chip-btn hover:bg-ink-50 dark:hover:bg-white/5" data-ask>Which payments are blocked and why?</button>
+    </div>
+    <form hx-post="{% url 'web:ask' %}" hx-target="#ask-log" hx-swap="beforeend" hx-on::after-request="this.reset()" class="flex items-end gap-2 p-4">
+      <textarea name="task" rows="1" required placeholder="e.g. Summarise this week's blocked spend" class="input max-h-32 resize-none" data-autosize></textarea>
+      <button class="btn btn-primary shrink-0 px-3" aria-label="Send">{% icon "arrow-up" %}</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+<!-- Confirm dialog -->
+<dialog id="confirm" class="w-[calc(100vw-2rem)] max-w-sm rounded-2xl border border-ink-200 bg-white p-0 text-ink-900 shadow-pop backdrop:bg-ink-950/40 backdrop:backdrop-blur-[2px] dark:border-white/10 dark:bg-night-800 dark:text-ink-100">
+  <form method="dialog" class="p-6">
+    <p class="text-base font-semibold" data-confirm-title>Are you sure?</p>
+    <p class="mt-1.5 text-sm muted" data-confirm-body></p>
+    <div class="mt-6 flex justify-end gap-2">
+      <button value="cancel" class="btn btn-outline">Cancel</button>
+      <button value="ok" class="btn btn-primary" data-confirm-ok>Continue</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Toasts -->
+<div id="toasts" class="pointer-events-none fixed inset-x-0 top-4 z-[60] flex flex-col items-center gap-2 px-4">
+  {% for m in messages %}
+  <div class="toast pointer-events-auto flex w-full max-w-md items-start gap-3 rounded-2xl border bg-white px-4 py-3 text-sm shadow-pop dark:bg-night-800
+              {% if m.level_tag == 'error' %}border-rose-200 dark:border-rose-400/30{% elif m.level_tag == 'warning' %}border-amber-200 dark:border-amber-400/30{% else %}border-ink-200 dark:border-white/10{% endif %}">
+    {% if m.level_tag == 'error' %}{% icon "circle-x" "size-5 shrink-0 text-rose-600" %}{% elif m.level_tag == 'warning' %}{% icon "triangle-alert" "size-5 shrink-0 text-amber-600" %}{% elif m.level_tag == 'success' %}{% icon "circle-check" "size-5 shrink-0 text-emerald-600" %}{% else %}{% icon "info" "size-5 shrink-0 text-ink-500" %}{% endif %}
+    <p class="flex-1 pt-px">{{ m }}</p>
+    <button type="button" class="text-ink-400 hover:text-ink-700" data-dismiss>{% icon "x" %}</button>
+  </div>
+  {% endfor %}
+</div>
+
+<script src="{% static 'web/app.js' %}?v=10"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

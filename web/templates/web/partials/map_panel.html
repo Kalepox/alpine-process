@@ -1,0 +1,44 @@
+{% load ui %}
+<div class="card shadow-pop">
+  <div class="flex items-start justify-between gap-3 p-5 pb-3">
+    <div class="min-w-0">
+      <div class="flex flex-wrap items-center gap-2">{% badge s.status %}{% if s.live %}<span class="chip !text-emerald-700 dark:!text-emerald-400" title="Position of a real vessel from aisstream.io. Cargo is sample data."><span class="size-1.5 rounded-full bg-emerald-500"></span>Live AIS · {{ s.live.name|default:"vessel" }} · MMSI {{ s.live.mmsi }}</span>{% else %}<span class="font-mono text-xs muted">{{ s.tracker_id }}</span>{% endif %}</div>
+      <h2 class="mt-2 truncate text-lg font-semibold tracking-tight">{{ s.ref }}</h2>
+      <p class="text-sm muted">{{ s.cargo }} · {{ s.quantity|num }} {{ s.unit }}</p>
+    </div>
+    <button type="button" data-close-panel class="btn btn-ghost -mr-2 -mt-1 px-2" aria-label="Close">{% icon "x" %}</button>
+  </div>
+  <div class="px-5">
+    <div class="flex items-center justify-between text-xs"><span class="font-medium">{{ s.origin }}</span><span class="font-medium">{{ s.destination }}</span></div>
+    <div class="relative mt-2 h-1.5 rounded-full bg-ink-100 dark:bg-white/5">
+      <div class="h-full rounded-full {% if s.status == 'ON_TRACK' %}bg-emerald-500{% elif s.status == 'ATTENTION' %}bg-amber-500{% elif s.status == 'PROBLEM' %}bg-rose-500{% else %}bg-ink-400{% endif %}" style="width: {{ s.progress }}%"></div>
+    </div>
+    <div class="mt-2 flex items-center justify-between text-xs muted">
+      <span>Departed {{ s.departed_at|date:"j M" }}</span>
+      <span>ETA {{ s.eta_current|date:"j M, H:i" }}{% if s.delay_hours > 0 %} <span class="font-medium text-amber-600 dark:text-amber-400">+{% if s.delay_hours >= 24 %}{% widthratio s.delay_hours 24 1 %}d{% else %}{{ s.delay_hours }}h{% endif %}</span>{% endif %}</span>
+    </div>
+  </div>
+  {% for a in s.alerts %}
+  <div class="mx-5 mt-4 flex gap-2.5 rounded-xl p-3 text-sm {% if a.severity == 'block' %}bg-rose-50 text-rose-800 dark:bg-rose-500/10 dark:text-rose-200{% else %}bg-amber-50 text-amber-900 dark:bg-amber-500/10 dark:text-amber-200{% endif %}">
+    {% icon "triangle-alert" "size-4 mt-0.5 shrink-0" %}<p>{{ a.message }}</p>
+  </div>
+  {% endfor %}
+  <dl class="mt-4 grid grid-cols-3 gap-px overflow-hidden border-y border-ink-100 bg-ink-100 text-sm dark:border-white/5 dark:bg-white/5">
+    <div class="bg-white p-3 dark:bg-night-850"><dt class="text-xs muted">Speed</dt><dd class="mt-0.5 font-medium tabular-nums">{{ s.position.speed }} {% if s.mode == 'SEA' %}kn{% else %}km/h{% endif %}</dd></div>
+    <div class="bg-white p-3 dark:bg-night-850"><dt class="text-xs muted">Cargo value</dt><dd class="mt-0.5 font-medium tabular-nums">{{ s.cargo_value|compact_eur }}</dd></div>
+    <div class="bg-white p-3 dark:bg-night-850"><dt class="text-xs muted">Last fix</dt><dd class="mt-0.5 font-medium">{{ s.position.ts|ago }}</dd></div>
+  </dl>
+  <div class="p-5 pt-4">
+    <p class="eyebrow mb-2">Cost ledger</p>
+    <table class="w-full text-sm">
+      {% for c in s.ledger %}
+      <tr><td class="py-1 text-ink-600 dark:text-ink-300">{{ c.label }}</td><td class="money py-1 {% if c.over %}font-medium text-amber-600 dark:text-amber-400{% endif %}">{{ c.projected|eur }}</td></tr>
+      {% endfor %}
+      <tr class="border-t border-ink-100 dark:border-white/5"><td class="pt-2 font-medium">Projected</td><td class="money pt-2 font-semibold">{{ s.ledger_totals.projected|eur }}</td></tr>
+    </table>
+    <div class="mt-5 flex gap-2">
+      <a href="{% url 'web:shipment' s.id %}" class="btn btn-primary flex-1">Open shipment</a>
+      {% if s.status == 'ATTENTION' or s.status == 'PROBLEM' %}<a href="{% url 'web:reroute' s.id %}" class="btn btn-outline">{% icon "route" %} Alternatives</a>{% endif %}
+    </div>
+  </div>
+</div>

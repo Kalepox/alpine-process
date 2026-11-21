@@ -1,0 +1,35 @@
+{% extends "web/base.html" %}{% load ui %}
+{% block title %}Report {{ r.period_start|date:"j M" }}{% endblock %}
+{% block crumbs %}
+<nav class="flex items-center gap-1.5 text-sm"><a href="{% url 'web:reports' %}" class="muted hover:text-ink-900 dark:hover:text-white">Weekly report</a>{% icon "chevron-right" "size-3.5 text-ink-300" %}<span class="font-medium">{{ r.period_start|date:"j M" }} – {{ r.period_end|date:"j M" }}</span></nav>
+{% endblock %}
+{% block content %}
+<div class="mx-auto grid max-w-[1100px] grid-cols-1 gap-6 lg:grid-cols-[1fr_280px]">
+  <article class="card p-6 sm:p-8">
+    <div class="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-ink-100 pb-5 dark:border-white/5">
+      <div>
+        <p class="autopilot-label">{% icon "cpu" "size-3" %} Drafted by the autopilot</p>
+        <h1 class="mt-2 text-xl font-semibold tracking-tight">Logistics spend · week of {{ r.period_start|date:"j M Y" }}</h1>
+      </div>
+      {% badge r.status %}
+    </div>
+    <div class="prose-report text-[15px]">{{ r.body_md|md }}</div>
+  </article>
+  <aside class="space-y-4 lg:sticky lg:top-24 lg:self-start">
+    <div class="card p-5">
+      <p class="card-title">Send to finance</p>
+      <p class="mt-1 text-sm muted">Recipients: CFO, Head of Ops. Sent only after a manager approves.</p>
+      {% if r.status == 'DRAFT' %}
+        {% if me.is_manager %}
+        <form method="post" action="{% url 'web:report_decide' r.id %}" class="mt-4 space-y-2" data-confirm-title="Approve and send this report?" data-confirm="It goes to the CFO and Head of Ops and is logged in the audit trail." data-confirm-ok="Send">{% csrf_token %}
+          <button name="decision" value="approve" class="btn btn-primary w-full">{% icon "send" %} Approve &amp; send</button>
+        </form>
+        {% else %}<p class="mt-4 flex items-center gap-2 text-xs muted">{% icon "lock" "size-3.5" %} Waiting for a manager.</p>{% endif %}
+      {% else %}
+        <p class="mt-4 flex items-center gap-2 text-sm text-emerald-700 dark:text-emerald-400">{% icon "circle-check" "size-4" %} Sent {{ r.sent_at|date:"j M, H:i" }} by {{ r.approved_by }}</p>
+      {% endif %}
+    </div>
+    <div class="rounded-2xl bg-ink-100/70 p-4 text-xs leading-relaxed text-ink-600 dark:bg-white/[.03] dark:text-ink-400">Numbers come from the cost ledger and approved documents. The agent writes the explanation, not the figures.</div>
+  </aside>
+</div>
+{% endblock %}

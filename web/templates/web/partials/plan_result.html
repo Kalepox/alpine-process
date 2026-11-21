@@ -1,0 +1,41 @@
+{% load ui %}
+{% if error %}
+<div class="card pop-in flex gap-3 p-4 text-sm shadow-pop">{% icon "circle-x" "size-5 shrink-0 text-rose-500" %}<p>{{ error }}</p></div>
+{% else %}
+<div class="card pop-in overflow-hidden shadow-pop">
+  <div class="p-5">
+    <p class="text-xs muted">Best route to {{ p.destination }}</p>
+    <div class="mt-1 flex items-end justify-between gap-3">
+      <p class="text-2xl font-semibold tabular-nums">{{ p.total_days }} days</p>
+      <p class="text-sm tabular-nums muted">{{ p.total_km|num }} km · ETA {{ p.eta|date:"j M, H:i" }}</p>
+    </div>
+  </div>
+  <ol class="border-t border-ink-100 px-5 py-4 dark:border-white/5">
+    {% for l in p.legs %}
+    <li class="relative flex gap-3 pb-4 last:pb-0">
+      {% if not forloop.last %}<span class="absolute left-[13px] top-7 h-[calc(100%-1.5rem)] w-px {% if l.mode == 'SEA' %}bg-[#3ec7e0]/50{% else %}bg-[#f5c542]/50{% endif %}"></span>{% endif %}
+      <span class="grid size-7 shrink-0 place-items-center rounded-full {% if l.mode == 'SEA' %}bg-[#3ec7e0]/15 text-[#3ec7e0]{% else %}bg-[#f5c542]/15 text-[#c99a12] dark:text-[#f5c542]{% endif %}">{% if l.mode == 'SEA' %}{% icon "ship" "size-3.5" %}{% else %}{% icon "truck" "size-3.5" %}{% endif %}</span>
+      <div class="min-w-0 flex-1 text-sm">
+        <p class="font-medium">{% if l.mode == 'SEA' %}By sea to {{ p.port }}{% else %}By truck to {{ p.destination }}{% endif %}</p>
+        <p class="text-xs tabular-nums muted">{{ l.km|num }} km · {% if l.days >= 1 %}{{ l.days }} days{% else %}{% widthratio l.hours 1 1 %} h{% endif %} · arrives {{ l.arrive|date:"j M, H:i" }}</p>
+        {% if l.mode == 'SEA' and p.handling_h %}<p class="mt-1 text-xs muted">+ {{ p.handling_h }} h unloading and customs at {{ p.port }}</p>{% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% if p.alternatives %}
+  <div class="border-t border-ink-100 px-5 py-3 text-xs dark:border-white/5">
+    <p class="muted">Other ports checked</p>
+    <p class="mt-1 tabular-nums">{% for a in p.alternatives %}{{ a.port }} <span class="muted">{{ a.days }} d</span>{% if not forloop.last %} · {% endif %}{% endfor %}</p>
+  </div>
+  {% endif %}
+  <form method="post" action="{% url 'web:plan_save' %}" class="border-t border-ink-100 bg-ink-50/50 px-5 py-3.5 dark:border-white/5 dark:bg-white/[.015]">{% csrf_token %}
+    <input type="hidden" name="name" value="{{ form.name }}"><input type="hidden" name="cargo" value="{{ form.cargo }}">
+    <input type="hidden" name="lat" value="{{ form.lat }}"><input type="hidden" name="lon" value="{{ form.lon }}">
+    <input type="hidden" name="destination" value="{{ form.destination }}">
+    <button class="btn btn-primary w-full">{% icon "plus" %} Add {{ form.name|default:"ship" }} to the map</button>
+  </form>
+  <p class="px-5 pb-3 text-[11px] muted">Sea lanes: searoute · roads: OpenStreetMap (OSRM) · speeds and handling times are sample assumptions.</p>
+</div>
+{{ geo|json_script:"plan-geo" }}
+{% endif %}

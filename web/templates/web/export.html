@@ -1,0 +1,58 @@
+{% extends "web/base.html" %}{% load ui %}
+{% block title %}Export{% endblock %}
+{% block crumbs %}<p class="text-sm font-medium">Payment export</p>{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-[1200px] space-y-6">
+  <div>
+    <h1 class="text-2xl font-semibold tracking-tight">Export</h1>
+    <p class="mt-1 text-sm muted">Approved payments become a SEPA credit transfer file (pain.001) and a CSV for accounting.</p>
+  </div>
+
+  <div class="card overflow-hidden">
+    <div class="flex flex-wrap items-center justify-between gap-4 p-5">
+      <div>
+        <p class="text-sm muted">Ready to export</p>
+        <p class="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{{ total|eur:2 }}</p>
+        <p class="mt-1 text-sm muted">{{ docs|length }} approved payment{{ docs|length|pluralize }}</p>
+      </div>
+      {% if me.is_manager %}
+      <form method="post" action="{% url 'web:export_generate' %}" data-confirm-title="Generate SEPA batch?" data-confirm="{{ docs|length }} payments · {{ total|eur:2 }}. This cannot be undone." data-confirm-ok="Generate batch">{% csrf_token %}
+        <button class="btn btn-primary btn-lg" {% if not docs %}disabled{% endif %}>{% icon "file-down" %} Generate SEPA batch</button>
+      </form>
+      {% else %}<span class="chip">{% icon "lock" "size-3" %} Managers generate batches</span>{% endif %}
+    </div>
+    {% if docs %}
+    <div class="overflow-x-auto border-t border-ink-100 dark:border-white/5">
+      <table class="tbl">
+        <thead><tr><th>Document</th><th>Vendor</th><th>Pay to</th><th>Category</th><th class="!text-right">Amount</th></tr></thead>
+        <tbody>
+          {% for d in docs %}
+          <tr class="row-link" data-href="{% url 'web:document' d.id %}">
+            <td class="font-medium">{{ d.number }}</td><td>{{ d.vendor.name }}</td>
+            <td class="font-mono text-[13px] muted">{{ d.iban|iban_mask }}</td><td class="muted">{{ d.category|humanize_code }}</td>
+            <td class="money font-medium">{{ d.total|eur:2 }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="card overflow-hidden">
+    <div class="card-head"><p class="card-title">Previous batches</p></div>
+    <table class="tbl">
+      <thead><tr><th>Batch</th><th>Created</th><th>By</th><th class="!text-right">Payments</th><th class="!text-right">Total</th><th class="!text-right">Files</th></tr></thead>
+      <tbody>
+        {% for b in batches %}
+        <tr>
+          <td class="font-medium">#{{ b.id }}</td><td class="muted">{{ b.created_at|date:"j M Y, H:i" }}</td><td>{{ b.created_by }}</td>
+          <td class="money">{{ b.count }}</td><td class="money font-medium">{{ b.total|eur:2 }}</td>
+          <td class="text-right"><span class="inline-flex gap-1"><a href="{{ b.sepa_file }}" class="btn btn-ghost btn-sm">{% icon "download" "size-3.5" %} XML</a><a href="{{ b.csv_file }}" class="btn btn-ghost btn-sm">CSV</a></span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

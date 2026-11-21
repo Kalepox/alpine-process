@@ -1,0 +1,25 @@
+{% extends "web/base.html" %}{% load ui %}
+{% block title %}Weekly report{% endblock %}
+{% block crumbs %}<p class="text-sm font-medium">Weekly report</p>{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-[900px] space-y-6">
+  <div class="flex flex-wrap items-end justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-semibold tracking-tight">Weekly report</h1>
+      <p class="mt-1 text-sm muted">Actual vs projected logistics spend, what was stopped, and what is coming.</p>
+    </div>
+    <form method="post" action="{% url 'web:report_draft' %}">{% csrf_token %}<button class="btn btn-primary">{% icon "pen-line" %} Draft this week's report</button></form>
+  </div>
+  <div class="card divide-y divide-ink-100 dark:divide-white/5">
+    {% for r in reports %}
+    <a href="{% url 'web:report' r.id %}" class="flex items-center justify-between gap-4 px-5 py-4 transition first:rounded-t-2xl last:rounded-b-2xl hover:bg-ink-50 dark:hover:bg-white/[.03]">
+      <div>
+        <p class="font-medium">{{ r.period_start|date:"j M" }} – {{ r.period_end|date:"j M Y" }}</p>
+        <p class="text-xs muted">{% if r.sent_at %}Sent {{ r.sent_at|date:"j M, H:i" }} · approved by {{ r.approved_by }}{% else %}Drafted {{ r.created_at|ago }}{% endif %}</p>
+      </div>
+      <span class="flex items-center gap-3">{% badge r.status %}{% icon "chevron-right" "size-4 text-ink-400" %}</span>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
