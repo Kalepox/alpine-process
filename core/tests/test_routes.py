@@ -1,3 +1,4 @@
+# pyright: reportOptionalMemberAccess=false, reportOptionalSubscript=false, reportOptionalOperand=false
 """v2 routing: planning, route options, approve_route (plan / replan / wait), corridor alerts, progress."""
 from datetime import timedelta
 from decimal import Decimal
@@ -154,8 +155,8 @@ def test_corridor_update_without_change_is_silent(shipment):
 def test_corridor_only_alerts_shipments_still_due_to_pass_it(planning_shipment, plan, marco, corridors):
     legs = [{"from": "Belawan", "to": "Port Said", "mode": "SEA", "corridors": ["SUEZ"]},
             {"from": "Port Said", "to": "Mersin", "mode": "SEA", "corridors": []}]
-    dto = RouteOptionDTO(label="two legs", legs=legs, transit_days=Decimal("20"),
-                         geometry=feature_collection([RED_SEA_PATH[:6], RED_SEA_PATH[5:]], legs))
+    dto = RouteOptionDTO.model_validate(dict(label="two legs", legs=legs, transit_days=Decimal("20"),
+                                             geometry=feature_collection([RED_SEA_PATH[:6], RED_SEA_PATH[5:]], legs)))
     [option] = plan(planning_shipment, [dto])
     s = approvals.approve_route(option.pk, marco)
     Shipment.objects.filter(pk=s.pk).update(current_leg_index=1)  # already through Suez

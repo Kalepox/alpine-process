@@ -181,7 +181,7 @@ class Command(BaseCommand):
                 departed = self.now + timedelta(hours=data.pop("departed_hours"))
                 eta = self.now + timedelta(hours=data.pop("eta_hours"))
             deadline_days = data.pop("deadline", None)
-            slip = timedelta(days=data.pop("eta_slip_days", 0))
+            slip = timedelta(days=int(str(data.pop("eta_slip_days", 0))))
 
             existing = Shipment.objects.filter(ref=ref).first()
             if existing is not None:
@@ -202,13 +202,14 @@ class Command(BaseCommand):
                                   input={"ref": ref, "origin": shipment.origin, "destination": shipment.destination,
                                          "goal": "Balanced", "note": "seeded history: planned at booking"},
                                   model="none (seeded)", prompt_version="seed")
-            [option] = shipment_svc.save_route_options(shipment, [RouteOptionDTO(
+            risk = max((Decimal(str(d["risk_score"])) for d in demo_data.CORRIDORS if d["code"] in codes),
+                       default=Decimal("0"))
+            [option] = shipment_svc.save_route_options(shipment, [RouteOptionDTO.model_validate(dict(
                 label=label, legs=[leg], geometry=feature_collection([path], [leg]), transit_days=days,
                 days_p10=days - 1, days_p90=days + 2, cost_breakdown=quoted,
-                landed_cost=shipment.cargo_value + sum(quoted.values()),
-                risk_score=max((d["risk_score"] for d in demo_data.CORRIDORS if d["code"] in codes), default=Decimal("0")),
-                rationale="Seeded: the route this shipment was booked on.", recommended=True,
-            )], run=run, actor_name=SEED)
+                landed_cost=shipment.cargo_value + sum(Decimal(str(v)) for v in quoted.values()),
+                risk_score=risk, rationale="Seeded: the route this shipment was booked on.", recommended=True,
+            ))], run=run, actor_name=SEED)
             audit.finish_run(run, AgentRun.Status.OK, summary=f"1 option: {label}")
             approvals.approve_route(option.pk, marco, note="approved at booking (seed)")
 
@@ -237,7 +238,7 @@ class Command(BaseCommand):
         existing = Shipment.objects.filter(ref=req["ref"]).first()
         if existing is not None:
             return existing
-        req["needed_by"] = (self.now + timedelta(days=req.pop("needed_by_days"))).date().isoformat()
+        req["needed_by"] = (self.now + timedelta(days=int(str(req.pop("needed_by_days"))))).date().isoformat()
         elena = get_user_model().objects.get(username="elena")
         return shipment_svc.create_planning_shipment(req, user=elena)
 

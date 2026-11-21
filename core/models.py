@@ -196,7 +196,7 @@ class Shipment(models.Model):
                                        help_text="distance along the approved route, 0–100")
     current_leg_index = models.PositiveIntegerField(default=0)
     request = models.JSONField(default=dict, blank=True, help_text="the RoutingRequest the plan was made from")
-    route = models.ForeignKey("RouteOption", null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
+    route = models.ForeignKey["RouteOption | None"]("RouteOption", null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
                               help_text="the approved route (set only by approvals.approve_route)")
     demurrage_per_day = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES, default=Decimal("0"))
     deadline = models.DateField(null=True, blank=True)
@@ -366,7 +366,7 @@ class AgentRun(models.Model):
     triggered_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT,
                                      related_name="+")
     shipment = models.ForeignKey(Shipment, null=True, blank=True, on_delete=models.PROTECT, related_name="runs")
-    document = models.ForeignKey("ExpenseDocument", null=True, blank=True, on_delete=models.PROTECT,
+    document = models.ForeignKey["ExpenseDocument | None"]("ExpenseDocument", null=True, blank=True, on_delete=models.PROTECT,
                                  related_name="runs")
     input = models.JSONField(null=True, blank=True)
     input_sha256 = models.CharField(max_length=64, blank=True)
@@ -426,7 +426,7 @@ class RouteOption(models.Model):
     risk_score = models.DecimalField(max_digits=4, decimal_places=3, default=Decimal("0"), help_text="0–1")
     score = models.JSONField(default=dict, blank=True, help_text="{criterion: value, ..., total}")
     possible_disruptions = models.JSONField(default=list, blank=True)
-    contingency = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    contingency = models.ForeignKey["RouteOption | None"]("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     rationale = models.TextField(blank=True)
     recommended = models.BooleanField(default=False)
     chosen = models.BooleanField(default=False)
@@ -743,7 +743,7 @@ class AuditEvent(models.Model):
     seq = models.BigIntegerField(unique=True, help_text="1, 2, 3 ... in chain order")
     ts = models.DateTimeField(db_index=True)
     run = models.ForeignKey(AgentRun, null=True, blank=True, on_delete=models.PROTECT, related_name="events")
-    parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="children")
+    parent = models.ForeignKey["AuditEvent | None"]("self", null=True, blank=True, on_delete=models.PROTECT, related_name="children")
     actor_type = models.CharField(max_length=6, choices=ActorType.choices)
     actor_name = models.CharField(max_length=80)
     actor_user = models.ForeignKey(

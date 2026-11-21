@@ -242,12 +242,13 @@ def finish_run(run: AgentRun, status: str, summary: str = "") -> AgentRun:
         raise ValueError("finish_run status must be OK or FAILED")
     if run.status != AgentRun.Status.RUNNING:
         raise ValueError(f"run {run.run_id} already {run.status}")
-    run.status, run.summary, run.finished_at = status, summary, timezone.now()
+    finished = timezone.now()
+    run.status, run.summary, run.finished_at = status, summary, finished
     run.save(update_fields=["status", "summary", "finished_at"])
     log(
         f"run.{run.pipeline}.finished", actor_type="agent", actor_name=run.pipeline, run=run,
         output={"status": status, "summary": summary},
-        meta={"duration_ms": int((run.finished_at - run.started_at).total_seconds() * 1000)},
+        meta={"duration_ms": int((finished - run.started_at).total_seconds() * 1000)},
         detail=summary[:500],
     )
     return run

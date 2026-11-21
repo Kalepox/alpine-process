@@ -1,3 +1,4 @@
+# pyright: reportOptionalMemberAccess=false, reportOptionalSubscript=false, reportOptionalOperand=false
 """v2 §0.9: append-only, hash-chained audit trail grouped by AgentRun."""
 import pytest
 from django.core.management import CommandError, call_command

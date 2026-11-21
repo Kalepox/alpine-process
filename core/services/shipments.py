@@ -283,20 +283,19 @@ def set_corridor_status(
         )
 
         for shipment in shipments_using(code):
-            kw = dict(actor_name=actor_name, run=run)
             if status == Corridor.Status.OPEN:
-                resolve_alerts(shipment, CORRIDOR_ALERTS, actor_type=actor_type, actor_user=actor_user,
-                               reason=f"{corridor.name} reopened", **kw)
+                resolve_alerts(shipment, CORRIDOR_ALERTS, actor_name=actor_name, run=run, actor_type=actor_type,
+                               actor_user=actor_user, reason=f"{corridor.name} reopened")
                 continue
             closed = status == Corridor.Status.CLOSED
             code_now = Alert.Code.CORRIDOR_CLOSED if closed else Alert.Code.CORRIDOR_AT_RISK
             other = Alert.Code.CORRIDOR_AT_RISK if closed else Alert.Code.CORRIDOR_CLOSED
-            resolve_alerts(shipment, [other], actor_type=actor_type, actor_user=actor_user,
-                           reason=f"{corridor.name} is now {status.lower()}", **kw)
+            resolve_alerts(shipment, [other], actor_name=actor_name, run=run, actor_type=actor_type,
+                           actor_user=actor_user, reason=f"{corridor.name} is now {status.lower()}")
             extra = f" Expected for ~{expected_duration_days} days." if closed and expected_duration_days else ""
             raise_alert(shipment, code_now, Severity.BLOCK if closed else Severity.WARN,
                         f"{corridor.name} is {status.lower()} on this shipment's route: {reason}.{extra}",
-                        actor_type=actor_type, **kw)
+                        actor_name=actor_name, run=run, actor_type=actor_type)
     return corridor
 
 

@@ -9,7 +9,10 @@ admin.site.site_title = "Monora"
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("accounts/", include("django.contrib.auth.urls")),
-    path("api/", include("integrations.urls")),  # A: /api/live/ (before web.urls, so it wins)
+    # A's live feed (DB-backed). Mounted at /api/a/live/ while web/data.py still serves mock data
+    # (C's /api/live/ answers the map). Once data.py reads core.models, C's live view should
+    # return integrations.live.live_feed(), or drop it and mount this at "api/".
+    path("api/a/", include("integrations.urls")),
     path("", include("web.urls")),
 ]
 

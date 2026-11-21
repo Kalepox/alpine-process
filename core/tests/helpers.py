@@ -11,7 +11,7 @@ CAPE_PATH = [[5.9, 80.0], [-34.8, 20.0], [14.9, -17.5], [36.0, -6.0], [37.3, 11.
 
 def route_dto(label, path, codes, *, days="23", breakdown=None, kind="ROUTE", recommended=False, **extra):
     leg = {"from": "A", "to": "B", "mode": "SEA", "km": 9000, "days": float(days), "corridors": codes}
-    return RouteOptionDTO(
+    return RouteOptionDTO.model_validate(dict(
         kind=kind, label=label, legs=[leg], geometry=feature_collection([path], [leg]) if path else {},
         transit_days=Decimal(days), cost_breakdown=breakdown or {}, recommended=recommended, **extra,
-    )
+    ))
