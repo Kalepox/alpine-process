@@ -171,7 +171,7 @@ route_advisor then returns `reroute_or_wait` and its rationale. The pipeline cal
 ## B2.12 ADK notes (checked against google-adk 2.15.0, H0)
 - **`output_schema` + `tools` together are supported.** Tools run during the reasoning loop, and the schema applies only to the final answer. `route_advisor` still gets no tools: the solver output goes in the prompt, which is simpler and deterministic.
 - **`GoogleSearchTool(bypass_multi_tools_limit=True)`** lets search sit beside other tools. We keep searcher → structurer anyway: `grounding_metadata` lands on the searcher's model response, and that is where `AuditPlugin` reads the source URLs.
-- **`Runner(agent=..., session_service=..., plugins=[AuditPlugin(...)])`**: plugins are a constructor argument, so `make_runner` attaches the plugin in one place.
+- **`Runner(app=App(name, root_agent, plugins=[AuditPlugin(run)]), session_service=...)`**: passing `plugins=` straight to `Runner` is deprecated in 2.15, so `make_runner` builds an `App`. The plugin is still attached in one place.
 - **`BasePlugin` callbacks** (all keyword-only, async):
   - `before/after_run_callback`, `before/after_agent_callback(agent, callback_context)`
   - `before/after_model_callback(callback_context, llm_request | llm_response)`; `llm_response` carries `usage_metadata` and `grounding_metadata`
