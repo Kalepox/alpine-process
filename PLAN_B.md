@@ -227,3 +227,20 @@ route_advisor then returns `reroute_or_wait` and its rationale. The pipeline cal
   - There's no `AgentTool(route_advisor)`: the advisor needs solver output, not a chat.
   - Tools are async wrappers around sync ORM code, because Django refuses ORM calls inside ADK's event loop.
 - **`adk web autopilot/adk_app`** loads an `App` with `AuditPlugin(run=None)`, so dev-UI sessions are on the trail too.
+
+## B2.16 As built in H15–17 (expense documents, secondary track)
+- **The rules are the source of truth** (`autopilot/domain/rules.py`, pure, v1 thresholds):
+  - `OVER_PREAPPROVAL`: spend against an approved pre-approval goes over the cap by more than max(€1, 1%).
+  - `NOT_PREAPPROVED`: a WAR_RISK or DEMURRAGE charge with no approved pre-approval.
+  - `IBAN_CHANGED`: the document's IBAN differs from the vendor master, after normalizing. The suggested action is fixed: verify through the vendor master's contact details.
+  - `DUPLICATE`: same vendor and number (block), or same vendor and total within 30 days (warn).
+  - `UNKNOWN_VENDOR`: the IBAN check needs a known vendor.
+  - `LOW_CONFIDENCE`: total unreadable (block), net + VAT ≠ total, or low extraction confidence (warn).
+- **What Gemini does:**
+  - `doc_intake` reads the file itself (PDF or image bytes) into `ExtractedExpense`. It must never guess, and missing fields stay null.
+  - `doc_explainer` may only reword the rules' issues. Code rejects its output if the issue codes change or a number appears that isn't in the document or the rules, and then the rules' own text is used.
+- `process_document` goes PROCESSING → intake → `rules.run` → `explainer.result`, saves the extraction and issues, then moves to NEEDS_REVIEW (any block issue) or READY + `request_payment`. It never pays; any error sets FAILED.
+- **The docs eval suite** compares `sample_data/*` against `sample_data/MANIFEST.md`. It skips until A's `make_sample_docs` exists and Gemini is configured. Manifest format, one line per file: `- war_risk.pdf: OVER_PREAPPROVAL` or `- freight_ok.pdf: clean`.
+- **A additions:**
+  - A service `expenses.record_extraction(doc, extracted, *, vendor, shipment, category, summary, actor_name, run)` that writes the ExpenseDocument fields from the extraction.
+  - A sample war-risk invoice whose line items say "war risk", so it categorizes as WAR_RISK.

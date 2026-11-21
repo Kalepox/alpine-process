@@ -3,15 +3,18 @@
 routes   8 planning scenarios: solver invariants + the advisor's recommendation must be a real option
 monitor  3 in-transit scenarios: detection -> replan -> the right kind of answer
 risk     5 canned news snippets -> risk_scout's structurer must classify them right (needs Gemini)
+docs     sample_data/ documents -> issue codes must match sample_data/MANIFEST.md (needs Gemini + seeded DB)
 
 Nothing is written to the database: agent steps go to an in-memory recorder.
 """
 from __future__ import annotations
 
 import datetime as dt
+import re
 import time
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable
 
@@ -199,7 +202,45 @@ def eval_risk() -> list[EvalRow]:
     return rows
 
 
-SUITES = {"routes": eval_routes, "monitor": eval_monitor, "risk": eval_risk}
+# ---------------------------------------------------------------- documents (Gemini + A's sample docs)
+SAMPLE_DIR = Path(__file__).resolve().parents[1] / "sample_data"
+_MANIFEST_LINE = re.compile(r"^\s*[-*]?\s*`?([\w.\-]+\.(?:pdf|png|jpe?g))`?\s*[:→\-]+\s*(.+)$", re.I)
+
+
+def parse_manifest(text: str) -> dict[str, set[str]]:
+    """'- war_risk_invoice.pdf: OVER_PREAPPROVAL' / '- freight_ok.pdf: clean' -> {file: {codes}}."""
+    out = {}
+    for line in text.splitlines():
+        if m := _MANIFEST_LINE.match(line):
+            out[m.group(1)] = {c for c in re.findall(r"[A-Z][A-Z_]{3,}", m.group(2))}
+    return out
+
+
+def eval_docs() -> list[EvalRow]:
+    from types import SimpleNamespace as NS
+
+    from autopilot.domain.rules import RuleEngine
+    from autopilot.pipelines.documents import extract, rule_context
+
+    manifest = SAMPLE_DIR / "MANIFEST.md"
+    if not manifest.exists() or not gemini_available():
+        why = "no sample_data/MANIFEST.md (A: make_sample_docs)" if not manifest.exists() else "no GOOGLE_API_KEY"
+        return [EvalRow("docs", "sample_data", "issue codes match MANIFEST", f"skipped: {why}", None, 0)]
+    rows = []
+    for name, expected in parse_manifest(manifest.read_text()).items():
+        def run(name=name, expected=expected):
+            data = (SAMPLE_DIR / name).read_bytes()
+            mime = "application/pdf" if name.lower().endswith(".pdf") else f"image/{name.rsplit('.', 1)[-1].lower()}"
+            exp = extract(data, mime, run=None, log=Recorder())
+            ctx, _, _ = rule_context(NS(pk=None, shipment=None), exp)
+            got = {d.code for d in RuleEngine().run(exp, ctx)}
+            return got == expected, ", ".join(sorted(got)) or "clean"
+        ok, got, ms = _timed(run)
+        rows.append(EvalRow("docs", name, ", ".join(sorted(expected)) or "clean", got, ok, ms))
+    return rows
+
+
+SUITES = {"routes": eval_routes, "monitor": eval_monitor, "risk": eval_risk, "docs": eval_docs}
 
 
 def run_evals(suites: list[str] | None = None) -> list[EvalRow]:
@@ -207,5 +248,5 @@ def run_evals(suites: list[str] | None = None) -> list[EvalRow]:
     rows = []
     for name in suites or list(SUITES):
         fn = SUITES[name]
-        rows += fn() if name == "risk" else fn(solver)
+        rows += fn(solver) if name in {"routes", "monitor"} else fn()
     return rows

@@ -12,10 +12,17 @@ def no_gemini(monkeypatch):
     monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
 
 
+def test_manifest_parsing():
+    from autopilot.evals import parse_manifest
+
+    text = "# Sample docs\n- `war_risk.pdf`: OVER_PREAPPROVAL\n* iban.png → IBAN_CHANGED (fraud)\n- freight_ok.pdf: clean\n"
+    assert parse_manifest(text) == {"war_risk.pdf": {"OVER_PREAPPROVAL"}, "iban.png": {"IBAN_CHANGED"}, "freight_ok.pdf": set()}
+
+
 def test_offline_eval_suites_pass(no_gemini):
     rows = run_evals(["routes", "monitor"])
     assert len(rows) == 11 and all(r.passed for r in rows), [(r.case, r.got) for r in rows if not r.passed]
-    assert all(r.passed is None for r in run_evals(["risk"]))  # needs Gemini: skipped, not failed
+    assert all(r.passed is None for r in run_evals(["risk", "docs"]))  # need Gemini: skipped, not failed
 
 
 @pytest.mark.django_db

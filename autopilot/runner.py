@@ -36,14 +36,19 @@ def make_runner(agent: BaseAgent, run, log=None) -> Runner:
     return Runner(app=app, session_service=InMemorySessionService())
 
 
-async def run_agent(agent: BaseAgent, message: str, *, run, state: dict | None = None, log=None) -> Any:
-    """Run one agent to completion; return what it stored under its output_key (or the session state)."""
+async def run_agent(agent: BaseAgent, message: str | list[types.Part], *, run, state: dict | None = None,
+                    log=None) -> Any:
+    """Run one agent to completion; return what it stored under its output_key (or the session state).
+
+    message: text, or parts (e.g. a document's bytes via types.Part.from_bytes plus an instruction).
+    """
     runner = make_runner(agent, run, log)
     try:
         session = await runner.session_service.create_session(
             app_name=APP_NAME, user_id=USER_ID, state={"run_id": str(getattr(run, "run_id", "")), **(state or {})},
         )
-        content = types.Content(role="user", parts=[types.Part(text=message)])
+        parts = [types.Part(text=message)] if isinstance(message, str) else message
+        content = types.Content(role="user", parts=parts)
         async for _ in runner.run_async(user_id=USER_ID, session_id=session.id, new_message=content):
             pass
         session = await runner.session_service.get_session(app_name=APP_NAME, user_id=USER_ID, session_id=session.id)
@@ -53,6 +58,6 @@ async def run_agent(agent: BaseAgent, message: str, *, run, state: dict | None =
     return session.state.get(output_key) if output_key else dict(session.state)
 
 
-def run_agent_sync(agent: BaseAgent, message: str, *, run, state: dict | None = None, log=None) -> Any:
+def run_agent_sync(agent: BaseAgent, message: str | list[types.Part], *, run, state: dict | None = None, log=None) -> Any:
     """Pipelines run in a worker thread with no event loop, so asyncio.run is safe here."""
     return asyncio.run(run_agent(agent, message, run=run, state=state, log=log))
