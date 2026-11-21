@@ -138,7 +138,7 @@ def _replan_affected(codes: list[str], *, run) -> list[int]:
     ids = affected_shipment_ids(codes) if codes else []
     for sid in ids:
         try:
-            replan(sid)  # its own AgentRun; one failing shipment must not stop the others
+            replan(sid, trigger={"kind": "CORRIDOR", "code": "CORRIDOR_CLOSED", "severity": "block", "corridors": codes})
         except Exception as e:
             audit.log("replan.failed", actor_type="system", actor_name="replan", run=run, detail=f"shipment {sid}: {e}")
     return ids

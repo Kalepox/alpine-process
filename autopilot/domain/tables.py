@@ -239,3 +239,34 @@ CASPIAN_FERRY = Link("AKTAU", "BAKU", (SEA,), ("MIDDLE_CORRIDOR_RAIL",))
 CASPIAN_FERRY_KM = 430
 
 AIR_GULF_HUBS = {"DUBAI", "DOHA"}
+
+
+# ---------------------------------------------------------------- monitor (PLAN_B §B2.5)
+@dataclass(frozen=True)
+class MonitorThresholds:
+    horizon_days: float = 3.0          # weather is checked on what the cargo reaches within this
+    sea_sample_km: float = 300.0       # wave forecast points along the current voyage
+    # land legs are straight lines between cities, not real roads: tighter limits would cry wolf
+    off_route_km: tuple = ((SEA, 50.0), (ROAD, 30.0), (RAIL, 30.0), (AIR, 100.0))
+    eta_slip_days: float = 2.0
+    restricted_delay_days: float = 2.0  # RESTRICTED corridor ahead with more expected delay -> act
+    snow_warn_cm: float = 10.0          # daily snowfall at an alpine pass
+    snow_block_cm: float = 25.0
+    gust_warn_kmh: float = 80.0
+    gust_block_kmh: float = 100.0
+    wave_warn_m: float = 6.0
+    wave_block_m: float = 8.0
+    weather_p_close: float = 0.6        # a pass with a blocking forecast becomes RESTRICTED at this p
+    replan_cooldown_min: float = 30.0
+    realert_hours: float = 6.0          # the same open problem is reported again after this
+
+
+MONITOR = MonitorThresholds()
+
+# Where weather closes land corridors: the passes themselves (lat, lon).
+CORRIDOR_POINTS: dict[str, tuple[float, float]] = {
+    "BRENNER": (47.00, 11.51),
+    "GOTTHARD": (46.56, 8.57),
+    "MONT_BLANC": (45.84, 6.92),
+    "FREJUS": (45.13, 6.69),
+}

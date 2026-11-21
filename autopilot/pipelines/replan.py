@@ -61,8 +61,11 @@ def replan_request(request: RoutingRequest, remaining_legs: list[Leg], *, run, o
     return ReplanOutcome(result.options, verdict, result.meta)
 
 
-def replan(shipment_id: int, user_id: int | None = None) -> list[int]:
-    """Returns the new RouteOption ids (incl. WAIT), one marked recommended."""
+def replan(shipment_id: int, user_id: int | None = None, trigger: dict | None = None) -> list[int]:
+    """Returns the new RouteOption ids (incl. WAIT), one marked recommended.
+
+    trigger: what caused it ({"kind", "code", "severity", "corridor"}); stored in the run for the monitor's cooldown.
+    """
     from django.contrib.auth import get_user_model
     from django.utils import timezone
 
@@ -75,7 +78,8 @@ def replan(shipment_id: int, user_id: int | None = None) -> list[int]:
     last = shipment.positions.order_by("-ts").first()
     legs = [Leg.model_validate(l) for l in shipment.route.legs[shipment.current_leg_index:]]
     run = audit.start_run("replan", trigger="user" if user else "system", triggered_by=user, shipment=shipment,
-                          input={"route_option": shipment.route_id, "leg_index": shipment.current_leg_index,
+                          input={"trigger": trigger or {}, "route_option": shipment.route_id,
+                                 "leg_index": shipment.current_leg_index,
                                  "position": [last.lat, last.lon, last.ts.isoformat(), last.source] if last else None},
                           model=MODEL, prompt_version=PROMPT_VERSION)
     try:

@@ -194,3 +194,19 @@ route_advisor then returns `reroute_or_wait` and its rationale. The pipeline cal
 - **Pre-approval** is requested only for the recommended option's spend above "carrying on as planned" (the baseline), and only for the categories that grow.
 - **scan/simulate re-plan affected shipments right away.** In H10–13 the monitor adds dedupe and cooldown.
 - **The parsed request is persisted.** When `plan_routes` parsed free text, it saves the parsed request (new A service `update_shipment_request`), so a replan never re-interprets the text.
+
+## B2.14 As built in H10–13 (monitor)
+- **Three detectors**, pure functions in `autopilot/monitor/detectors.py`. The planned "road news" detector needs no code of its own: risk_scout's road group sets corridor status, and the corridor detector picks it up.
+  - **corridor:** CLOSED ahead → block. RESTRICTED with more than 2 expected days of delay → warn.
+  - **tracking:** off route by more than 50 km (sea), 30 km (road/rail) or 100 km (air), or ETA slipped by more than 2 days. Land geometry is straight lines between cities, so tighter limits would raise false alarms.
+  - **weather (Open-Meteo):** alpine **passes** on road legs reached within 3 days, and every 300 km of the **current voyage** for ships. Snow ≥10 cm is warn and ≥25 cm block. Gusts ≥80 km/h are warn and ≥100 km/h block. Waves ≥6 m are warn and ≥8 m block. Each point takes the worst value of the 3-day window, which is conservative. Rail is skipped (tunnels).
+- **A blocking forecast at a pass sets the corridor to RESTRICTED** (p 0.6, source `weather`). It affects every shipment using that pass, and the replan then avoids it. Demo: snow at Brenner reroutes the Rotterdam→Milan truck via another pass (tested).
+- **Dedupe and cooldown.**
+  - `MonitorMemory` reports a problem only when it is new, more severe, or still open after 6 h. A problem that clears and comes back counts as new.
+  - A shipment is re-planned at most once per tick, and not again within 30 min unless the severity rises. The trigger is stored in the replan run's input.
+- **Quiet ticks write nothing.** An `AgentRun("monitor")` opens only when something is new or the weather API failed. A weather failure never stops the other detectors.
+- `manage.py monitor_routes [--once] [--interval]` runs every 300 s live and every 20 s in replay mode. Weather is skipped in replay mode, where `simulate_weather(shipment, "snow"|"wind"|"storm")` drives the demo.
+- **A additions:**
+  - `Corridor.status_source` needs the value `weather`, and `AgentRun.pipeline` needs `monitor`.
+  - Alert codes `WEATHER_RISK` and `OFF_ROUTE`; `ROAD_INCIDENT` isn't needed (road closures arrive as corridor alerts).
+  - A `monitor` service in docker-compose.
