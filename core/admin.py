@@ -42,10 +42,12 @@ class VendorAdmin(admin.ModelAdmin):
 
 @admin.register(m.Corridor)
 class CorridorAdmin(admin.ModelAdmin):
-    list_display = ("code", "name", "mode", "status", "status_source", "status_updated_at", "war_risk_pct")
+    list_display = ("code", "name", "mode", "status", "risk_score", "p_close_30d", "status_source", "status_updated_at")
     list_filter = ("mode", "status")
     search_fields = ("code", "name")
-    readonly_fields = ("status", "status_reason", "status_source", "status_updated_at")
+    # status changes go through shipments.set_corridor_status (alerts + audit)
+    readonly_fields = ("status", "status_reason", "status_source", "sources", "status_updated_at",
+                       "risk_score", "p_close_30d", "expected_duration_days")
 
 
 @admin.register(m.Budget)
@@ -90,7 +92,7 @@ class ShipmentDocumentInline(admin.TabularInline):
 class RouteOptionInline(admin.TabularInline):
     model = m.RouteOption
     extra = 0
-    fields = ("label", "corridor", "mode", "transit_days", "delay_days", "total_extra_cost", "chosen")
+    fields = ("kind", "label", "transit_days", "delay_days", "landed_cost", "risk_score", "recommended", "chosen", "run")
     readonly_fields = fields
     can_delete = False
 
@@ -100,17 +102,19 @@ class RouteOptionInline(admin.TabularInline):
 
 @admin.register(m.Shipment)
 class ShipmentAdmin(admin.ModelAdmin):
-    list_display = ("ref", "mode", "cargo", "origin", "destination", "corridor", "status", "eta_current")
-    list_filter = ("mode", "status", "corridor", "customs_status")
+    list_display = ("ref", "mode", "cargo", "origin", "destination", "status", "progress_pct", "eta_current", "route")
+    list_filter = ("mode", "status", "customs_status")
     search_fields = ("ref", "tracker_id", "cargo", "origin", "destination")
-    readonly_fields = ("status", "eta_current", "latest_positions", "created_at", "updated_at")
+    # status / route / progress change only through services (approve_route, record_position, alerts)
+    readonly_fields = ("status", "route", "progress_pct", "current_leg_index", "eta_current",
+                       "latest_positions", "created_at", "updated_at")
     inlines = [CostLineInline, AlertInline, ShipmentDocumentInline, RouteOptionInline]
     fieldsets = (
-        (None, {"fields": ("ref", "mode", "tracker_id", "status", "corridor")}),
+        (None, {"fields": ("ref", "mode", "tracker_id", "status", "route", "progress_pct", "current_leg_index")}),
         ("Cargo", {"fields": ("cargo", "quantity", "unit", "cargo_value")}),
         ("Route & timing", {"fields": (
             "origin", "origin_latlon", "destination", "dest_latlon",
-            "departed_at", "eta_planned", "eta_current", "deadline", "demurrage_per_day",
+            "departed_at", "eta_planned", "eta_current", "deadline", "demurrage_per_day", "request",
         )}),
         ("Customs", {"fields": (
             "hs_code", "origin_country", "incoterm", "freight_cost_for_customs",
@@ -159,9 +163,42 @@ class ShipmentDocumentAdmin(admin.ModelAdmin):
 # --------------------------------------------------------------------------
 @admin.register(m.RouteOption)
 class RouteOptionAdmin(admin.ModelAdmin):
-    list_display = ("shipment", "label", "corridor", "delay_days", "total_extra_cost", "chosen", "created_by")
-    list_filter = ("chosen", "mode")
-    readonly_fields = ("chosen",)
+    list_display = ("shipment", "kind", "label", "transit_days", "delay_days", "landed_cost", "risk_score",
+                    "recommended", "chosen", "run")
+    list_filter = ("kind", "recommended", "chosen")
+    # options are agent output: never edited, approved only via approvals.approve_route
+    readonly_fields = [f.name for f in m.RouteOption._meta.fields]
+    actions = ["approve_selected_route"]
+
+    def has_add_permission(self, request):
+        return False
+
+    @admin.action(description="Approve selected route (one per shipment)")
+    def approve_selected_route(self, request, queryset):
+        for option in queryset:
+            try:
+                approvals.approve_route(option.pk, request.user, note="via admin")
+                self.message_user(request, f"Approved: {option}", messages.SUCCESS)
+            except (PermissionDenied, InvalidTransition, ValueError) as exc:
+                self.message_user(request, f"#{option.pk}: {exc}", messages.ERROR)
+
+
+@admin.register(m.AgentRun)
+class AgentRunAdmin(admin.ModelAdmin):
+    list_display = ("started_at", "pipeline", "run_id", "trigger", "triggered_by", "shipment", "status", "finished_at")
+    list_filter = ("pipeline", "status", "trigger")
+    search_fields = ("run_id", "summary")
+    readonly_fields = [f.name for f in m.AgentRun._meta.fields]
+    actions = None
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(m.PreApproval)
@@ -274,7 +311,7 @@ class WeeklyReportAdmin(admin.ModelAdmin):
 # --------------------------------------------------------------------------
 @admin.register(m.AuditEvent)
 class AuditEventAdmin(admin.ModelAdmin):
-    list_display = ("ts", "actor_type", "actor_name", "action", "shipment", "document", "short_detail")
+    list_display = ("seq", "ts", "actor_type", "actor_name", "action", "run", "shipment", "document", "short_detail")
     list_filter = ("actor_type", "action", "shipment")
     search_fields = ("action", "actor_name", "detail", "input_sha256", "document__number", "shipment__ref")
     date_hierarchy = "ts"

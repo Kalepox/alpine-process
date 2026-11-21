@@ -3,7 +3,7 @@
   python manage.py demo_reset            # asks for confirmation
   python manage.py demo_reset --noinput  # docker compose exec -T web python manage.py demo_reset --noinput
 
-migrate -> flush -> clear uploaded/exported files + outbox -> seed_demo --with-tracks
+migrate -> flush -> clear uploaded/exported files + outbox -> seed_demo --with-tracks -> verify_audit
 (tracks.json is optional; without it shipments start from their seeded position).
 """
 import shutil
@@ -36,6 +36,7 @@ class Command(BaseCommand):
             self._clear_files()
         seed_opts = {} if opts["no_tracks"] else {"with_tracks": str(settings.TRACKS_FILE)}
         call_command("seed_demo", stdout=self.stdout, **seed_opts)
+        call_command("verify_audit", stdout=self.stdout)
         self.stdout.write(self.style.SUCCESS("demo_reset: done. Log in as elena / marco (demo1234)."))
 
     def _clear_files(self):

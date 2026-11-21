@@ -1,4 +1,4 @@
-"""A.2 services: transitions, permissions, approval gates, audit."""
+"""Expense track services: transitions, permissions, payment gates, seed, admin."""
 from datetime import timedelta
 from decimal import Decimal
 
@@ -6,18 +6,16 @@ import pytest
 from django.core.exceptions import PermissionDenied
 from django.core.management import call_command
 
-from autopilot.domain.schemas import IssueDraft, RouteOptionDTO
-from core.models import (
-    Alert, AuditEvent, CostLine, ExpenseDocument, Issue, PendingAction, PreApproval, Shipment, WeeklyReport,
-)
-from core.services import approvals, audit, expenses, shipments
+from autopilot.domain.schemas import IssueDraft
+from core.models import AuditEvent, CostLine, ExpenseDocument, PendingAction, RouteOption, Shipment, WeeklyReport
+from core.services import approvals, audit, expenses
 from core.services.errors import InvalidTransition, PayloadMismatch
 
 pytestmark = pytest.mark.django_db
 
 
 def actions(**filters):
-    return list(AuditEvent.objects.filter(**filters).order_by("id").values_list("action", flat=True))
+    return list(AuditEvent.objects.filter(**filters).order_by("seq").values_list("action", flat=True))
 
 
 # ------------------------------------------------------------------- audit
@@ -183,92 +181,6 @@ def test_reject_payment_rejects_document(ready_doc, marco):
     assert doc.status == "REJECTED"
 
 
-# ------------------------------------------------------------ pre-approvals
-def _options():
-    return [
-        RouteOptionDTO(label="Via Cape of Good Hope", corridor_code="CAPE", mode="SEA", transit_days=38,
-                       delay_days=12, cost_breakdown={"FREIGHT": Decimal("9000"), "DEMURRAGE": Decimal("2500")},
-                       total_extra_cost=Decimal("11500"), rationale="avoids the closure"),
-        RouteOptionDTO(label="Stay, war-risk cover", corridor_code="RED_SEA_SUEZ", mode="SEA", transit_days=23,
-                       delay_days=0, cost_breakdown={"WAR_RISK": Decimal("11460")}, total_extra_cost=Decimal("11460")),
-    ]
-
-
-def test_save_route_options_replaces_unchosen(shipment):
-    shipments.save_route_options(shipment, _options(), actor_name="agent.reroute")
-    shipments.save_route_options(shipment, _options()[:1], actor_name="agent.reroute")
-    assert shipment.route_options.count() == 1
-
-
-def test_save_route_options_rejects_unknown_corridor(shipment):
-    bad = RouteOptionDTO(label="x", corridor_code="ATLANTIS", mode="SEA", transit_days=1, delay_days=0,
-                         total_extra_cost=Decimal("1"))
-    with pytest.raises(ValueError):
-        shipments.save_route_options(shipment, [bad], actor_name="agent.reroute")
-
-
-def test_preapproval_flow_reroutes_shipment(shipment, corridors, elena, marco):
-    shipments.set_corridor_status("RED_SEA_SUEZ", "CLOSED", "attacks on shipping", "manual", actor_name="elena", actor_user=elena)
-    shipment.refresh_from_db()
-    assert shipment.status == "PROBLEM"
-
-    cape, _ = shipments.save_route_options(shipment, _options(), actor_name="agent.reroute")
-    pa = approvals.request_preapproval(shipment, cape, Decimal("12000"), ["FREIGHT", "DEMURRAGE"],
-                                       "Red Sea closed", requested_by="elena")
-    assert approvals.request_preapproval(shipment, cape, Decimal("12000"), ["FREIGHT"], "again",
-                                         requested_by="elena").pk == pa.pk
-    with pytest.raises(PermissionDenied):
-        approvals.decide_preapproval(pa.pk, elena, True)
-
-    approvals.decide_preapproval(pa.pk, marco, True, note="go Cape")
-    shipment.refresh_from_db()
-    cape.refresh_from_db()
-    assert cape.chosen
-    assert shipment.corridor == corridors["CAPE"]
-    assert shipment.eta_current == shipment.eta_planned + timedelta(days=12)
-    assert shipment.status == "ON_TRACK"
-    freight = CostLine.objects.get(shipment=shipment, category="FREIGHT")
-    assert freight.projected == Decimal("321000.00") and freight.preapproval == pa
-    assert CostLine.objects.get(shipment=shipment, category="DEMURRAGE").projected == Decimal("2500.00")
-    with pytest.raises(InvalidTransition):
-        approvals.decide_preapproval(pa.pk, marco, True)
-
-
-def test_rejected_preapproval_changes_nothing(shipment, corridors, marco):
-    cape, _ = shipments.save_route_options(shipment, _options(), actor_name="agent.reroute")
-    pa = approvals.request_preapproval(shipment, cape, Decimal("12000"), ["FREIGHT"], "x", requested_by="agent.reroute")
-    approvals.decide_preapproval(pa.pk, marco, False, note="too expensive")
-    shipment.refresh_from_db()
-    assert PreApproval.objects.get(pk=pa.pk).status == "REJECTED"
-    assert shipment.corridor == corridors["RED_SEA_SUEZ"]
-
-
-# ------------------------------------------------- corridors, alerts, positions
-def test_corridor_closed_raises_alerts_and_reopen_clears(shipment):
-    shipments.set_corridor_status("RED_SEA_SUEZ", "CLOSED", "attacks", "search", actor_name="agent.disruption")
-    shipments.set_corridor_status("RED_SEA_SUEZ", "CLOSED", "still", "search", actor_name="agent.disruption")
-    assert shipment.alerts.filter(code="CORRIDOR_CLOSED", resolved=False).count() == 1
-    shipments.set_corridor_status("RED_SEA_SUEZ", "OPEN", "reopened", "search", actor_name="agent.disruption")
-    shipment.refresh_from_db()
-    assert shipment.status == "ON_TRACK"
-    assert not shipment.alerts.filter(resolved=False).exists()
-
-
-def test_restricted_corridor_means_attention(shipment):
-    shipments.set_corridor_status("RED_SEA_SUEZ", "RESTRICTED", "war-risk premium up", "manual", actor_name="system")
-    shipment.refresh_from_db()
-    assert shipment.status == "ATTENTION"
-
-
-def test_record_position_dedupes_and_clears_signal_lost(shipment):
-    shipments.raise_alert(shipment, "AIS_SIGNAL_LOST", "warn", "no AIS for 7h", actor_name="collector.watchdog")
-    ts = shipment.eta_planned - timedelta(days=5)
-    a = shipments.record_position(shipment, 12.0, 45.0, ts, "aisstream", speed=12.1)
-    b = shipments.record_position(shipment, 12.0, 45.0, ts, "aisstream", speed=12.1)
-    assert a.pk == b.pk
-    assert not shipment.alerts.filter(code="AIS_SIGNAL_LOST", resolved=False).exists()
-
-
 # ---------------------------------------------------------------- reports
 def test_request_report_send_is_idempotent():
     from datetime import date
@@ -282,24 +194,32 @@ def test_request_report_send_is_idempotent():
 # ------------------------------------------------------------------- seed
 def test_seed_demo_is_idempotent_and_books_history():
     call_command("seed_demo")
-    counts = (Shipment.objects.count(), ExpenseDocument.objects.count(), CostLine.objects.count())
+    counts = (Shipment.objects.count(), ExpenseDocument.objects.count(), CostLine.objects.count(),
+              RouteOption.objects.count(), AuditEvent.objects.count())
     call_command("seed_demo")
-    assert counts == (Shipment.objects.count(), ExpenseDocument.objects.count(), CostLine.objects.count())
-    assert counts[0] == 6 and counts[1] == 13
+    assert counts == (Shipment.objects.count(), ExpenseDocument.objects.count(), CostLine.objects.count(),
+                      RouteOption.objects.count(), AuditEvent.objects.count())
+    assert counts[0] == 7 and counts[1] == 13 and counts[3] == 6  # 6 in transit (+ routes) + 1 planning
     assert set(ExpenseDocument.objects.values_list("status", flat=True)) == {"EXPORTED"}
     from core.models import ExportBatch
 
     assert ExportBatch.objects.count() == 1 and ExportBatch.objects.get().documents.count() == 13
     assert Shipment.objects.get(ref="MV Karoo Spirit").status == "ATTENTION"
     freight = CostLine.objects.get(shipment__ref="MV Sundara Bay", category="FREIGHT")
-    assert freight.actual == Decimal("247000.00")
-    assert all(s.positions.exists() for s in Shipment.objects.all())
+    assert freight.quoted == freight.projected == Decimal("247000.00") and freight.actual == Decimal("247000.00")
+
+    planning = Shipment.objects.get(status="PLANNING")
+    assert planning.route is None and planning.request["goal"] == "Balanced" and not planning.positions.exists()
+    for s in Shipment.objects.exclude(status="PLANNING"):
+        assert s.route is not None and s.route.chosen and s.positions.exists(), s.ref
+        assert AuditEvent.objects.filter(action="route.approved", route_option=s.route, actor_user__username="marco").exists()
     # both Red Sea ships start before Bab-el-Mandeb, so a closure really affects them
     for ref in ("MT Aurelia Grace", "MV Sundara Bay"):
         assert Shipment.objects.get(ref=ref).positions.get().lon > 43.4, ref
     karoo = Shipment.objects.get(ref="MV Karoo Spirit")
     assert karoo.eta_current is not None and karoo.eta_planned is not None
     assert karoo.eta_current - karoo.eta_planned == timedelta(days=3)
+    assert audit.verify_chain() == (True, None)
 
 
 # ------------------------------------------------------------------- admin

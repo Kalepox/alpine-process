@@ -22,11 +22,12 @@ from django.utils import timezone
 
 from core import demo_data
 from core.checklists import required_kinds
-from core.geo import point_along, shipment_path
+from autopilot.domain.schemas import RouteOptionDTO
+from core.geo import feature_collection, path_length_km, point_along
 from core.models import (
-    Budget, Corridor, CostLine, CustomsRate, ExpenseDocument, Position, Shipment, ShipmentDocument, Vendor,
+    AgentRun, Budget, Corridor, CustomsRate, ExpenseDocument, Shipment, ShipmentDocument, Vendor,
 )
-from core.services import approvals, expenses, export, shipments as shipment_svc
+from core.services import approvals, audit, expenses, export, shipments as shipment_svc
 
 DEMO_PASSWORD = "demo1234"
 SEED = "seed"  # actor name for everything this command does
@@ -36,13 +37,14 @@ OPS_PERMS = [
     "view_vendor", "view_corridor", "view_budget", "view_shipment", "view_shipmentdocument",
     "view_customsrate", "view_position", "view_alert", "view_routeoption", "view_preapproval",
     "view_costline", "view_expensedocument", "view_weeklyreport", "view_issue",
-    "view_pendingaction", "view_exportbatch", "view_auditevent",
+    "view_pendingaction", "view_exportbatch", "view_auditevent", "view_agentrun",
+    "add_shipment",  # plan a shipment (create_planning_shipment)
     "add_expensedocument", "change_expensedocument",
     "add_shipmentdocument", "change_shipmentdocument",
     "change_issue",
 ]
-# manager: ops + the three approval permissions
-MANAGER_PERMS = OPS_PERMS + ["approve_spend", "approve_payment", "export_payments"]
+# manager: ops + the approval permissions
+MANAGER_PERMS = OPS_PERMS + ["approve_route", "approve_spend", "approve_payment", "export_payments"]
 
 GROUPS = {"ops": OPS_PERMS, "manager": MANAGER_PERMS}
 USERS = [("elena", "ops", "Elena", "Ops"), ("marco", "manager", "Marco", "Manager")]
@@ -70,15 +72,16 @@ class Command(BaseCommand):
             corridors = self.seed_corridors()
             self.seed_budgets()
             self.seed_customs_rates()
-            ships = self.seed_shipments(corridors)
+            ships = self.seed_shipments()
             self.seed_checklists(ships)
+            planning = self.seed_planning()
         self.seed_history(vendors, ships)
         if options["with_tracks"]:
             self.seed_tracks(Path(options["with_tracks"]))
 
         self.stdout.write(self.style.SUCCESS(
             f"seed_demo: users elena/marco/admin ({DEMO_PASSWORD}), {len(vendors)} vendors, "
-            f"{len(corridors)} corridors, {len(ships)} shipments, "
+            f"{len(corridors)} corridors, {len(ships)} shipments in transit + {planning.ref!r} planning, "
             f"{CustomsRate.objects.count()} customs rates, {ShipmentDocument.objects.count()} shipping docs, "
             f"{ExpenseDocument.objects.count()} expense documents"
         ))
@@ -125,7 +128,7 @@ class Command(BaseCommand):
                 corridor.status_updated_at = self.now
                 corridor.save()
             elif not created:  # refresh geometry/labels, never overwrite a live status
-                for k in ("name", "mode", "waypoints", "war_risk_pct"):
+                for k in ("name", "mode", "geometry"):
                     setattr(corridor, k, data[k])
                 corridor.save()
             corridors[code] = corridor
@@ -159,14 +162,18 @@ class Command(BaseCommand):
                     },
                 )
 
-    def seed_shipments(self, corridors) -> dict[str, Shipment]:
+    def seed_shipments(self) -> dict[str, Shipment]:
+        """In-transit shipments, each planned and approved through the real v2 flow:
+        AgentRun(plan_routes) -> save_route_options -> marco approve_route. Only the
+        timing (departure in the past, ETA) is then shifted to fit the scenario."""
+        marco = get_user_model().objects.get(username="marco")
         ships = {}
         for s in demo_data.SHIPMENTS:
             data = dict(s)
             ref = data.pop("ref")
             quoted = data.pop("quoted")
             alert = data.pop("alert", None)
-            corridor = corridors[data.pop("corridor")]
+            path, codes, label = data.pop("path"), data.pop("corridors"), data.pop("route_label")
             if "departed" in data:
                 departed = self.now + timedelta(days=data.pop("departed"))
                 eta = self.now + timedelta(days=data.pop("eta"))
@@ -176,36 +183,63 @@ class Command(BaseCommand):
             deadline_days = data.pop("deadline", None)
             slip = timedelta(days=data.pop("eta_slip_days", 0))
 
-            shipment, created = Shipment.objects.get_or_create(
-                ref=ref,
-                defaults={
-                    **data,
-                    "tracker_id": demo_data.TRACKERS.get(ref, ""),
-                    "corridor": corridor,
-                    "departed_at": departed,
-                    "eta_planned": eta,
-                    "eta_current": eta + slip,
-                    "deadline": (self.now + timedelta(days=deadline_days)).date() if deadline_days else None,
-                },
-            )
-            ships[ref] = shipment
-            if not created:
+            existing = Shipment.objects.filter(ref=ref).first()
+            if existing is not None:
+                ships[ref] = existing
                 continue
-
-            for category, amount in quoted.items():
-                CostLine.objects.create(shipment=shipment, category=category, quoted=amount, projected=amount)
-
-            # starting position along the route, so the map has something before collectors run
-            total = (eta - departed).total_seconds()
-            fraction = (self.now - departed).total_seconds() / total if total > 0 else 0
-            (lat, lon), heading = point_along(shipment_path(shipment), fraction)
-            Position.objects.create(
-                shipment=shipment, lat=lat, lon=lon, heading=round(heading, 1), speed=SPEED[shipment.mode],
-                ts=self.now, source=Position.Source.REPLAY,
+            shipment = Shipment.objects.create(
+                ref=ref, status=Shipment.Status.PLANNING, tracker_id=demo_data.TRACKERS.get(ref, ""),
+                departed_at=departed, eta_planned=eta,
+                deadline=(self.now + timedelta(days=deadline_days)).date() if deadline_days else None,
+                request={"seeded": True, "goal": "Balanced"}, **data,
             )
+
+            # planned at booking: one run, one recommended option, approved by marco
+            days = Decimal(str(round((eta - departed).total_seconds() / 86400, 1)))
+            leg = {"from": shipment.origin, "to": shipment.destination, "mode": shipment.mode,
+                   "km": round(path_length_km(path)), "days": float(days), "corridors": codes}
+            run = audit.start_run(AgentRun.Pipeline.PLAN_ROUTES, trigger=AgentRun.Trigger.SYSTEM, shipment=shipment,
+                                  input={"ref": ref, "origin": shipment.origin, "destination": shipment.destination,
+                                         "goal": "Balanced", "note": "seeded history: planned at booking"},
+                                  model="none (seeded)", prompt_version="seed")
+            [option] = shipment_svc.save_route_options(shipment, [RouteOptionDTO(
+                label=label, legs=[leg], geometry=feature_collection([path], [leg]), transit_days=days,
+                days_p10=days - 1, days_p90=days + 2, cost_breakdown=quoted,
+                landed_cost=shipment.cargo_value + sum(quoted.values()),
+                risk_score=max((d["risk_score"] for d in demo_data.CORRIDORS if d["code"] in codes), default=Decimal("0")),
+                rationale="Seeded: the route this shipment was booked on.", recommended=True,
+            )], run=run, actor_name=SEED)
+            audit.finish_run(run, AgentRun.Status.OK, summary=f"1 option: {label}")
+            approvals.approve_route(option.pk, marco, note="approved at booking (seed)")
+
+            # scenario timing (seed fixture: the booking happened in the past)
+            Shipment.objects.filter(pk=shipment.pk).update(departed_at=departed, eta_planned=eta, eta_current=eta + slip)
+            shipment.refresh_from_db()
+
+            # starting position: where the remaining distance at cruise speed matches the
+            # scenario ETA, so interpolation / live speeds keep the ETA consistent
+            hours_left = max(((eta + slip) - self.now).total_seconds() / 3600, 0.0)
+            kmh = shipment_svc.speed_kmh(SPEED[shipment.mode], shipment.mode) or 1.0
+            total_km = path_length_km(path)
+            fraction = 1 - min(hours_left * kmh / total_km, 0.98) if total_km else 0.0
+            (lat, lon), heading = point_along(path, fraction)
+            shipment_svc.record_position(shipment, lat, lon, self.now, "replay",
+                                         speed=SPEED[shipment.mode], heading=round(heading, 1))
             if alert:
                 shipment_svc.raise_alert(shipment, alert["code"], alert["severity"], alert["message"], actor_name=SEED)
+            shipment.refresh_from_db()
+            ships[ref] = shipment
         return ships
+
+    def seed_planning(self) -> Shipment:
+        """The demo's 'Plan a shipment' starting point: PLANNING, no route yet."""
+        req = dict(demo_data.PLANNING_REQUEST)
+        existing = Shipment.objects.filter(ref=req["ref"]).first()
+        if existing is not None:
+            return existing
+        req["needed_by"] = (self.now + timedelta(days=req.pop("needed_by_days"))).date().isoformat()
+        elena = get_user_model().objects.get(username="elena")
+        return shipment_svc.create_planning_shipment(req, user=elena)
 
     # ----------------------------------------------------------------- tracks
     def seed_tracks(self, path: Path):

@@ -8,15 +8,18 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import timedelta
 
+from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
 
 from core.models import Shipment
 from core.services import audit, shipments as shipment_svc
+from core.services.shipments import LIVE_SOURCES
 from integrations import registry
 from integrations.base import PositionDTO, TrackingProvider
-from integrations.replay import ReplayProvider, replay_key
+from integrations.replay import _DeadReckoningProvider, replay_key
 
 log = logging.getLogger(__name__)
 
@@ -36,14 +39,19 @@ def report_error(provider_name: str, exc: BaseException) -> None:
 
 
 def active_shipments(mode: str) -> list[Shipment]:
-    """Shipments in this mode that are under way (departed, not arrived)."""
+    """Shipments in this mode that are under way (route approved, departed, not arrived)."""
     now = timezone.now()
     return list(
         Shipment.objects.filter(mode=mode)
-        .exclude(status=Shipment.Status.ARRIVED)
+        .exclude(status__in=[Shipment.Status.ARRIVED, Shipment.Status.PLANNING])
         .filter(Q(departed_at__isnull=True) | Q(departed_at__lte=now))
-        .select_related("corridor")
+        .select_related("route")
     )
+
+
+def _no_recent_fix(shipment: Shipment, cutoff) -> bool:
+    latest = shipment.positions.filter(source__in=LIVE_SOURCES).order_by("-ts").first()
+    return latest is None or latest.ts < cutoff
 
 
 def _store(provider: TrackingProvider, dtos: list[PositionDTO], by_key: dict[str, Shipment]) -> int:
@@ -76,23 +84,26 @@ def _fetch(provider: TrackingProvider, by_key: dict[str, Shipment]) -> int:
 def poll_once(mode: str) -> int:
     """One collection round for a mode. Returns the number of positions stored.
 
-    Shipments with a tracker_id go to the mode's provider (live or replay, per
-    registry); shipments without one, or whose live provider is unhealthy, are
-    always moved by replay so the map stays alive.
+    replay mode            -> every shipment moved by ReplayProvider
+    live, healthy provider -> tracked shipments from the live provider; shipments
+                              without a tracker or without a real fix for > 1 h are
+                              interpolated along their route (source="interpolated")
+    live, provider down    -> everyone interpolated, so the map stays alive
     """
     ships = active_shipments(mode)
     provider = registry.get_provider(mode)
-    replay = registry.replay_provider(mode)
+    fallback = registry.fallback_provider(mode)
 
-    if isinstance(provider, ReplayProvider):
-        return _fetch(replay, {replay_key(s): s for s in ships})
+    if isinstance(provider, _DeadReckoningProvider):
+        return _fetch(fallback, {replay_key(s): s for s in ships})
 
-    live_keys = {s.tracker_id: s for s in ships if s.tracker_id}
-    stored = _fetch(provider, live_keys)
-    untracked = {replay_key(s): s for s in ships if not s.tracker_id}
-    if not provider.healthy():  # failed during this round: replay everyone for now
-        untracked = {replay_key(s): s for s in ships}
-    return stored + _fetch(replay, untracked)
+    stored = _fetch(provider, {s.tracker_id: s for s in ships if s.tracker_id})
+    if provider.healthy():
+        cutoff = timezone.now() - timedelta(seconds=settings.INTERPOLATE_AFTER_SECONDS)
+        stale = [s for s in ships if not s.tracker_id or _no_recent_fix(s, cutoff)]
+    else:  # failed during this round
+        stale = ships
+    return stored + _fetch(fallback, {replay_key(s): s for s in stale})
 
 
 def sea_mmsis() -> list[str]:

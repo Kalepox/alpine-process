@@ -9,7 +9,7 @@ from pathlib import Path
 AUTOPILOT_DIR = Path(__file__).resolve().parents[2] / "autopilot"
 
 FORBIDDEN_NAMES = {
-    "decide_preapproval", "decide_payment", "decide_report_send", "build_export_batch",
+    "approve_route", "decide_preapproval", "decide_payment", "decide_report_send", "build_export_batch",
     # private helpers that skip the human gate
     "_transition", "_write_batch", "_cancel_pending_payments", "_send_report",
 }

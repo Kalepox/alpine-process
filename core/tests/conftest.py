@@ -6,9 +6,9 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 
 from core.management.commands.seed_demo import Command as SeedCommand
-from core.models import Corridor, CostLine, Shipment, Vendor
-from core.services import approvals, expenses
-
+from core.models import Corridor, Shipment, Vendor
+from core.services import approvals, audit, expenses, shipments
+from core.tests.helpers import RED_SEA_PATH, route_dto
 
 @pytest.fixture(autouse=True)
 def _media_tmp(settings, tmp_path):
@@ -34,11 +34,30 @@ def marco(roles):
 
 @pytest.fixture
 def corridors(db):
-    red = Corridor.objects.create(code="RED_SEA_SUEZ", name="Red Sea / Suez", mode="SEA",
-                                  waypoints=[[12.6, 43.4], [30.0, 32.55]], war_risk_pct=Decimal("0.15"))
-    cape = Corridor.objects.create(code="CAPE", name="Cape of Good Hope", mode="SEA",
-                                   waypoints=[[-34.8, 20.0], [36.0, -6.0]])
-    return {"RED_SEA_SUEZ": red, "CAPE": cape}
+    def line(*latlon):
+        return {"type": "LineString", "coordinates": [[p[1], p[0]] for p in latlon]}
+
+    return {
+        c.code: c for c in [
+            Corridor.objects.create(code="BAB_EL_MANDEB", name="Bab-el-Mandeb", mode="SEA",
+                                    geometry=line([12.45, 43.25], [12.85, 43.6]), war_risk_pct=Decimal("0.15")),
+            Corridor.objects.create(code="SUEZ", name="Suez Canal", mode="SEA", geometry=line([29.95, 32.55], [31.25, 32.33])),
+            Corridor.objects.create(code="CAPE", name="Cape of Good Hope", mode="SEA", geometry=line([-34.4, 18.4], [-34.8, 20.0])),
+        ]
+    }
+
+
+@pytest.fixture
+def plan(marco):
+    """plan(shipment, [dto, ...]) -> options saved under one AgentRun."""
+
+    def _plan(shipment, dtos, pipeline="plan_routes"):
+        run = audit.start_run(pipeline, trigger="user", triggered_by=marco, shipment=shipment, input={"test": True})
+        options = shipments.save_route_options(shipment, dtos, run=run, actor_name="agent.solver")
+        audit.finish_run(run, "OK", summary=f"{len(options)} options")
+        return options
+
+    return _plan
 
 
 @pytest.fixture
@@ -48,16 +67,25 @@ def vendor(db):
 
 
 @pytest.fixture
-def shipment(corridors):
-    eta = timezone.now() + timedelta(days=10)
-    s = Shipment.objects.create(
-        ref="MT Aurelia Grace", mode="SEA", cargo="Crude palm oil", quantity=Decimal("8000"), unit="mt",
-        cargo_value=Decimal("7640000"), origin="Belawan, ID", destination="Mersin, TR",
-        origin_latlon=[3.78, 98.69], dest_latlon=[36.78, 34.63], corridor=corridors["RED_SEA_SUEZ"],
-        eta_planned=eta, eta_current=eta,
+def planning_shipment(elena, corridors):
+    return shipments.create_planning_shipment(
+        {"cargo": "Crude palm oil", "quantity": "8000", "unit": "mt", "cargo_value": "7640000",
+         "origin": "Belawan, ID", "origin_latlon": [3.78, 98.69], "destination": "Mersin, TR",
+         "dest_latlon": [36.78, 34.63], "ref": "MT Aurelia Grace", "goal": "Balanced"},
+        user=elena,
     )
-    CostLine.objects.create(shipment=s, category="FREIGHT", quoted=Decimal("312000"), projected=Decimal("312000"))
-    CostLine.objects.create(shipment=s, category="INSURANCE", quoted=Decimal("11460"), projected=Decimal("11460"))
+
+
+@pytest.fixture
+def shipment(planning_shipment, plan, marco):
+    """MT Aurelia Grace in transit on the approved Red Sea route, quoted FREIGHT + INSURANCE."""
+    [red] = plan(planning_shipment, [route_dto(
+        "Via Bab-el-Mandeb / Suez", RED_SEA_PATH, ["BAB_EL_MANDEB", "SUEZ"], days="23",
+        breakdown={"FREIGHT": Decimal("312000"), "INSURANCE": Decimal("11460")}, recommended=True)])
+    approvals.approve_route(red.pk, marco, note="booked")
+    s = Shipment.objects.get(pk=planning_shipment.pk)
+    shipments.record_position(s, 5.9, 95.3, timezone.now() - timedelta(minutes=5), "aisstream", speed=12.5)
+    s.refresh_from_db()
     return s
 
 
@@ -87,3 +115,4 @@ def ready_doc(make_doc):
     approvals.set_doc_status(doc, "READY", actor_type="agent", actor_name="agent.doc_pipeline")
     pa = approvals.request_payment(doc, requested_by="agent.doc_pipeline")
     return doc, pa
+

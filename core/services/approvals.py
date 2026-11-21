@@ -1,10 +1,10 @@
-"""Human-in-the-loop gates: "asks first". Owned by A.
+"""Human-in-the-loop gates: "asks first" (DEV_PLAN v2 §0.8, §0.10). Owned by A.
 
 Agents may call:   request_preapproval, request_payment, request_report_send,
                    set_doc_status, create_issues
-Humans only:       decide_preapproval, decide_payment, decide_report_send, resolve_issue
-                   (autopilot/ importing a decide_* function fails core/tests/test_safety.py;
-                    resolve_issue needs a user with core.change_issue)
+Humans only:       approve_route, decide_preapproval, decide_payment, decide_report_send,
+                   resolve_issue (autopilot/ importing approve_route / decide_* fails
+                   core/tests/test_safety.py; resolve_issue needs core.change_issue)
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from django.utils import timezone
 
 from core.banking import normalize_iban
 from core.models import (
-    Alert,
+    AgentRun,
     ApprovalStatus,
     CostCategory,
     CostLine,
@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DOC_TRANSITIONS", "InvalidTransition", "PayloadMismatch",
-    "request_preapproval", "decide_preapproval", "set_doc_status", "create_issues", "resolve_issue",
+    "approve_route", "request_preapproval", "decide_preapproval", "set_doc_status", "create_issues", "resolve_issue",
     "request_payment", "decide_payment", "request_report_send", "decide_report_send",
 ]
 
@@ -122,7 +122,88 @@ def _to_category(key: str) -> str:
 
 
 # --------------------------------------------------------------------------
-# pre-approval of extra spend (reroute)
+# routes
+# --------------------------------------------------------------------------
+def approve_route(route_option_id: int, user, note: str = "") -> Shipment:
+    """perm core.approve_route. The human decision on a route (plan, replan or wait).
+
+    * marks the option chosen (any previously chosen option of the shipment is un-chosen)
+    * Shipment.route = option; current_leg_index = 0; progress re-projected
+    * PLANNING -> ON_TRACK: departed_at = now, eta_planned = eta_current = now + transit_days,
+      CostLine.quoted = projected = cost_breakdown
+    * replan / wait: eta_current = now + transit_days (options are computed from the
+      cargo's current position), CostLine.projected = cost_breakdown
+    * corridor alerts are cleared when every corridor left on the new route is OPEN
+    * the audit event links run + route_option and stores the numbers the human saw
+    """
+    _require_perm(user, "core.approve_route")
+    username = user.get_username()
+    with transaction.atomic():
+        option = RouteOption.objects.select_for_update().get(pk=route_option_id)
+        shipment = Shipment.objects.select_for_update().get(pk=option.shipment_id)
+        if option.chosen:
+            raise InvalidTransition(f"route option {option.pk} is already the approved route")
+        if shipment.status == Shipment.Status.ARRIVED:
+            raise InvalidTransition(f"shipment {shipment.pk} has arrived")
+        seen = audit.snapshot(option)  # what the human approved, frozen in the trail
+        before = audit.snapshot(shipment)
+        planning = shipment.status == Shipment.Status.PLANNING
+        now = timezone.now()
+
+        RouteOption.objects.filter(shipment=shipment, chosen=True).update(chosen=False)
+        option.chosen = True
+        option.save(update_fields=["chosen"])
+
+        shipment.route = option
+        shipment.current_leg_index = 0
+        eta = now + timedelta(days=float(option.transit_days)) if option.transit_days else None
+        if planning:
+            shipment.status = Shipment.Status.ON_TRACK
+            shipment.departed_at = shipment.departed_at or now
+            shipment.eta_planned = shipment.eta_planned or eta
+            shipment.progress_pct = Decimal("0")
+        if eta is not None:
+            shipment.eta_current = eta
+        shipment.save()
+
+        totals: dict[str, Decimal] = {}
+        for key, value in (option.cost_breakdown or {}).items():
+            cat = _to_category(key)
+            totals[cat] = totals.get(cat, Decimal("0")) + _money(value)
+        cost_lines = {}
+        for cat, amount in sorted(totals.items()):
+            line = CostLine.objects.filter(shipment=shipment, category=cat).order_by("id").first()
+            if line is None:
+                line = CostLine(shipment=shipment, category=cat)
+            if planning:
+                line.quoted = amount
+            line.projected = amount
+            line.save()
+            cost_lines[cat] = audit.snapshot(line)
+
+        latest = shipment.positions.order_by("-ts").first()
+        if latest is not None and not planning:
+            shipments.update_progress(shipment, latest.lat, latest.lon)
+        still_bad = Corridor.objects.filter(code__in=option.corridor_codes()).exclude(status=Corridor.Status.OPEN)
+        if not still_bad.exists():
+            shipments.resolve_alerts(
+                shipment, shipments.CORRIDOR_ALERTS, actor_name=username, actor_type="user", actor_user=user,
+                run=option.run, reason=f"route approved: {option.label}",
+            )
+        shipments.refresh_status(shipment, actor_name=username, run=option.run)
+        shipment.refresh_from_db()
+        audit.log(
+            "route.approved", actor_type="user", actor_name=username, actor_user=user,
+            run=option.run, route_option=option, shipment=shipment,
+            input={"option": seen}, before=before,
+            after={"shipment": audit.snapshot(shipment), "cost_lines": cost_lines},
+            detail=note or option.label,
+        )
+    return shipment
+
+
+# --------------------------------------------------------------------------
+# pre-approval of extra spend (a cap expense documents are checked against)
 # --------------------------------------------------------------------------
 def request_preapproval(
     shipment: Shipment,
@@ -132,6 +213,7 @@ def request_preapproval(
     reason: str,
     *,
     requested_by: str,
+    run: AgentRun | None = None,
 ) -> PreApproval:
     """Create a PENDING PreApproval (idempotent per shipment + route option). Never approves."""
     amount_cap = _money(amount_cap)
@@ -155,75 +237,46 @@ def request_preapproval(
         )
         audit.log(
             "preapproval.requested", actor_type=_actor_type_for(requested_by), actor_name=requested_by,
-            shipment=shipment, after=audit.snapshot(pa), detail=reason,
+            run=run, shipment=shipment, route_option=route_option, preapproval=pa,
+            after=audit.snapshot(pa), detail=reason,
         )
     return pa
 
 
 def decide_preapproval(preapproval_id: int, user, approve: bool, note: str = "") -> PreApproval:
-    """perm core.approve_spend.
+    """perm core.approve_spend. Approve or reject a spending cap.
 
-    On approve with a route option: mark it chosen, move the shipment onto its
-    corridor, push eta_current by delay_days, set CostLine.projected =
-    quoted + delta per category, link cost lines to this pre-approval, and clear
-    CORRIDOR_CLOSED if the new corridor is open.
+    On approve, the shipment's cost lines for the cap's categories are linked to
+    it (expense rules check documents against the cap). Moving the shipment onto
+    a route is approve_route's job, not this one.
     """
     _require_perm(user, "core.approve_spend")
+    username = user.get_username()
     with transaction.atomic():
         pa = PreApproval.objects.select_for_update().get(pk=preapproval_id)
         if pa.status != ApprovalStatus.PENDING:
             raise InvalidTransition(f"pre-approval {pa.pk} already {pa.status}")
-        shipment = Shipment.objects.select_for_update().get(pk=pa.shipment_id)
-        before = {"preapproval": audit.snapshot(pa), "shipment": audit.snapshot(shipment)}
-
+        before = audit.snapshot(pa)
         pa.status = ApprovalStatus.APPROVED if approve else ApprovalStatus.REJECTED
-        pa.decided_by = user
-        pa.decided_at = timezone.now()
-        pa.note = note
+        pa.decided_by, pa.decided_at, pa.note = user, timezone.now(), note
         pa.save()
 
         cost_lines = {}
         if approve:
-            ro = pa.route_option
-            deltas: dict[str, Decimal] = {}
-            if ro is not None:
-                RouteOption.objects.filter(shipment=shipment, chosen=True).exclude(pk=ro.pk).update(chosen=False)
-                ro.chosen = True
-                ro.save(update_fields=["chosen"])
-                if ro.corridor_id:
-                    shipment.corridor_id = ro.corridor_id
-                if shipment.eta_planned:
-                    shipment.eta_current = shipment.eta_planned + timedelta(days=ro.delay_days)
-                shipment.save()
-                for key, value in (ro.cost_breakdown or {}).items():
-                    cat = _to_category(key)
-                    deltas[cat] = deltas.get(cat, Decimal("0")) + _money(value)
-
-            for cat in sorted(set(pa.categories) | set(deltas)):
-                line = CostLine.objects.filter(shipment=shipment, category=cat).order_by("id").first()
+            for cat in pa.categories:
+                line = CostLine.objects.filter(shipment_id=pa.shipment_id, category=cat).order_by("id").first()
                 if line is None:
-                    line = CostLine.objects.create(shipment=shipment, category=cat)
-                if cat in deltas:
-                    line.projected = line.quoted + deltas[cat]
-                if cat in pa.categories:
-                    line.preapproval = pa
+                    line = CostLine(shipment_id=pa.shipment_id, category=cat)
+                line.preapproval = pa
                 line.save()
                 cost_lines[cat] = audit.snapshot(line)
 
-            if ro is not None:
-                new_corridor = Corridor.objects.filter(pk=shipment.corridor_id).first()
-                if new_corridor is None or new_corridor.status == Corridor.Status.OPEN:
-                    shipments.resolve_alerts(
-                        shipment, [Alert.Code.CORRIDOR_CLOSED], actor_name=user.get_username(),
-                        actor_type="user", actor_user=user, reason=f"rerouted: {ro.label}",
-                    )
-
-        shipment.refresh_from_db()
         audit.log(
             "preapproval.approved" if approve else "preapproval.rejected",
-            actor_type="user", actor_name=user.get_username(), actor_user=user, shipment=shipment,
-            before=before,
-            after={"preapproval": audit.snapshot(pa), "shipment": audit.snapshot(shipment), "cost_lines": cost_lines},
+            actor_type="user", actor_name=username, actor_user=user,
+            run=pa.route_option.run if pa.route_option else None,
+            shipment=pa.shipment, route_option=pa.route_option, preapproval=pa,
+            input={"preapproval": before}, after={"preapproval": audit.snapshot(pa), "cost_lines": cost_lines},
             detail=note,
         )
     return pa

@@ -45,16 +45,51 @@ class IssueDraft(BaseModel):
     suggested_action: str = ""
 
 
-class RouteOptionDTO(BaseModel):
-    label: str
-    corridor_code: str | None = None
+class RouteLeg(BaseModel):
+    """legs[i] of a RouteOption. `corridors` are Corridor codes (chokepoints) the leg passes."""
+
+    from_: str = Field(alias="from")
+    to: str
     mode: Literal["SEA", "AIR", "ROAD", "RAIL"]
-    waypoints: list[list[float]] = Field(default_factory=list)
-    transit_days: int
-    delay_days: int
+    km: float = 0
+    days: float = 0
+    corridors: list[str] = Field(default_factory=list)
+
+    model_config = {"populate_by_name": True}
+
+
+class RouteOptionDTO(BaseModel):
+    """What the solver/advisor hands to core.services.shipments.save_route_options (v2 §0.7).
+
+    geometry: GeoJSON, coordinates [lon, lat]: a FeatureCollection with one LineString
+              per leg (a single LineString / list of LineStrings is accepted too).
+    transit_days: days from now (plan: from departure; replan/wait: from the cargo's
+              current position). approve_route sets eta_current = now + transit_days.
+    cost_breakdown: FULL landed cost per category for this route (not a delta).
+    contingency: index of another option in the same list (e.g. the Cape fallback).
+    """
+
+    kind: Literal["ROUTE", "WAIT"] = "ROUTE"
+    label: str
+    legs: list[RouteLeg] = Field(default_factory=list)
+    geometry: dict | list = Field(default_factory=dict)
+    transit_days: Decimal
+    days_p10: Decimal | None = None
+    days_p90: Decimal | None = None
+    delay_days: Decimal = Decimal("0")
     cost_breakdown: dict[str, Decimal] = Field(default_factory=dict)
-    total_extra_cost: Decimal
+    landed_cost: Decimal = Decimal("0")
+    co2_kg: Decimal = Decimal("0")
+    risk_score: Decimal = Decimal("0")
+    score: dict = Field(default_factory=dict)
+    possible_disruptions: list[dict] = Field(default_factory=list)
+    contingency: int | None = None
     rationale: str = ""
+    recommended: bool = False
+
+    def model_dump(self, **kwargs):  # legs keep their "from" key for the database
+        kwargs.setdefault("by_alias", True)
+        return super().model_dump(**kwargs)
 
 
 class CostBreakdown(BaseModel):

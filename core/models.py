@@ -1,10 +1,12 @@
-"""Monora data model (DEV_PLAN 0.6). Owned by A (INFRA).
+"""Monora data model (DEV_PLAN v2 §0.7). Owned by A (INFRA).
 
 Rules for everyone:
   * Read these models freely; change state ONLY through core.services.*
   * Only A edits this file and creates migrations.
-  * AuditEvent is append-only: no update, no delete (enforced below).
+  * AuditEvent is append-only and hash-chained: no update, no delete (enforced
+    here, by a Postgres trigger, and checked by `manage.py verify_audit`).
 """
+import uuid
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -94,23 +96,31 @@ class Corridor(models.Model):
 
     class Source(models.TextChoices):
         SEARCH = "search"
+        GDELT = "gdelt"
         MANUAL = "manual"
 
-    code = models.CharField(max_length=40, unique=True, help_text='e.g. "RED_SEA_SUEZ", "CAPE"')
+    code = models.CharField(max_length=40, unique=True,
+                            help_text='chokepoint / region, e.g. "SUEZ", "BAB_EL_MANDEB", "CAPE"')
     name = models.CharField(max_length=120)
     mode = models.CharField(max_length=4, choices=TransportMode.choices)
-    waypoints = models.JSONField(default=list, blank=True, help_text="[[lat, lon], ...]")
+    geometry = models.JSONField(
+        default=dict, blank=True,
+        help_text='GeoJSON geometry, coordinates [lon, lat] (e.g. {"type": "LineString", "coordinates": [...]})',
+    )
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.OPEN)
-    status_reason = models.TextField(blank=True)
-    status_source = models.CharField(max_length=10, choices=Source.choices, blank=True)
-    status_updated_at = models.DateTimeField(null=True, blank=True)
+    risk_score = models.DecimalField(max_digits=4, decimal_places=3, default=Decimal("0"), help_text="0–1")
+    p_close_30d = models.DecimalField(max_digits=4, decimal_places=3, default=Decimal("0"),
+                                      help_text="probability of closure within 30 days, 0–1")
+    expected_duration_days = models.PositiveIntegerField(null=True, blank=True,
+                                                         help_text="expected closure length when CLOSED")
     war_risk_pct = models.DecimalField(
         max_digits=6, decimal_places=3, default=Decimal("0"),
         help_text="Insurance surcharge, % of cargo value, applied when RESTRICTED (0.75 = 0.75%)",
     )
-
-    # for type checkers only (Django creates these at runtime)
-    shipments: "RelatedManager[Shipment]"
+    status_reason = models.TextField(blank=True)
+    status_source = models.CharField(max_length=10, choices=Source.choices, blank=True)
+    sources = models.JSONField(default=list, blank=True, help_text='[{"title": ..., "url": ...}]')
+    status_updated_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["code"]
@@ -137,6 +147,7 @@ class Budget(models.Model):
 # --------------------------------------------------------------------------
 class Shipment(models.Model):
     class Status(models.TextChoices):
+        PLANNING = "PLANNING"  # requested, no route approved yet
         ON_TRACK = "ON_TRACK"
         ATTENTION = "ATTENTION"
         PROBLEM = "PROBLEM"
@@ -180,8 +191,13 @@ class Shipment(models.Model):
     departed_at = models.DateTimeField(null=True, blank=True)
     eta_planned = models.DateTimeField(null=True, blank=True)
     eta_current = models.DateTimeField(null=True, blank=True)
-    corridor = models.ForeignKey(Corridor, null=True, blank=True, on_delete=models.SET_NULL, related_name="shipments")
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.ON_TRACK)
+    progress_pct = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0"),
+                                       help_text="distance along the approved route, 0–100")
+    current_leg_index = models.PositiveIntegerField(default=0)
+    request = models.JSONField(default=dict, blank=True, help_text="the RoutingRequest the plan was made from")
+    route = models.ForeignKey("RouteOption", null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
+                              help_text="the approved route (set only by approvals.approve_route)")
     demurrage_per_day = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES, default=Decimal("0"))
     deadline = models.DateField(null=True, blank=True)
     # customs
@@ -196,7 +212,7 @@ class Shipment(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     # for type checkers only (Django creates these at runtime)
-    corridor_id: int | None
+    route_id: int | None
     documents: "RelatedManager[ShipmentDocument]"
     positions: "RelatedManager[Position]"
     alerts: "RelatedManager[Alert]"
@@ -276,6 +292,7 @@ class Position(models.Model):
         OPENSKY = "opensky"
         ROUTES = "routes"
         REPLAY = "replay"
+        INTERPOLATED = "interpolated"  # estimated along the route, no fix (UI: dashed trail)
 
     shipment = models.ForeignKey(Shipment, on_delete=models.CASCADE, related_name="positions")
     lat = models.FloatField()
@@ -283,7 +300,7 @@ class Position(models.Model):
     speed = models.FloatField(null=True, blank=True, help_text="knots (sea/air) or km/h (road)")
     heading = models.FloatField(null=True, blank=True)
     ts = models.DateTimeField()
-    source = models.CharField(max_length=10, choices=Source.choices)
+    source = models.CharField(max_length=12, choices=Source.choices)
 
     # for type checkers only (Django creates these at runtime)
     shipment_id: int
@@ -300,6 +317,7 @@ class Alert(models.Model):
     class Code(models.TextChoices):
         AIS_SIGNAL_LOST = "AIS_SIGNAL_LOST"
         CORRIDOR_CLOSED = "CORRIDOR_CLOSED"
+        CORRIDOR_AT_RISK = "CORRIDOR_AT_RISK"
         ETA_SLIP = "ETA_SLIP"
         SANCTIONS_CHECK = "SANCTIONS_CHECK"
         MISSING_SHIPPING_DOC = "MISSING_SHIPPING_DOC"
@@ -322,33 +340,124 @@ class Alert(models.Model):
 
 
 # --------------------------------------------------------------------------
-# Money
+# Trail: one AgentRun per pipeline execution (see AuditEvent below)
+# --------------------------------------------------------------------------
+class AgentRun(models.Model):
+    class Pipeline(models.TextChoices):
+        PLAN_ROUTES = "plan_routes"
+        SCAN_DISRUPTIONS = "scan_disruptions"
+        REPLAN = "replan"
+        PROCESS_DOCUMENT = "process_document"
+        ASK = "ask"
+
+    class Trigger(models.TextChoices):
+        USER = "user"
+        SYSTEM = "system"
+        SCHEDULE = "schedule"
+
+    class Status(models.TextChoices):
+        RUNNING = "RUNNING"
+        OK = "OK"
+        FAILED = "FAILED"
+
+    run_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    pipeline = models.CharField(max_length=20, choices=Pipeline.choices)
+    trigger = models.CharField(max_length=10, choices=Trigger.choices, default=Trigger.SYSTEM)
+    triggered_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT,
+                                     related_name="+")
+    shipment = models.ForeignKey(Shipment, null=True, blank=True, on_delete=models.PROTECT, related_name="runs")
+    document = models.ForeignKey("ExpenseDocument", null=True, blank=True, on_delete=models.PROTECT,
+                                 related_name="runs")
+    input = models.JSONField(null=True, blank=True)
+    input_sha256 = models.CharField(max_length=64, blank=True)
+    model = models.CharField(max_length=60, blank=True)
+    prompt_version = models.CharField(max_length=30, blank=True)
+    status = models.CharField(max_length=8, choices=Status.choices, default=Status.RUNNING)
+    started_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    summary = models.TextField(blank=True)
+
+    # for type checkers only (Django creates these at runtime)
+    triggered_by_id: int | None
+    shipment_id: int | None
+    document_id: int | None
+    events: "RelatedManager[AuditEvent]"
+    route_options: "RelatedManager[RouteOption]"
+
+    class Meta:
+        ordering = ["-started_at"]
+
+    def __str__(self):
+        return f"{self.pipeline} {str(self.run_id)[:8]} ({self.status})"
+
+
+# --------------------------------------------------------------------------
+# Routing
 # --------------------------------------------------------------------------
 class RouteOption(models.Model):
+    """One candidate route (or "wait it out") for a shipment, produced by one AgentRun.
+
+    Options are never deleted: what a human was shown stays in the trail.
+      legs:      [{"from", "to", "mode", "km", "days", "corridors": [codes]}]
+      geometry:  GeoJSON FeatureCollection, one LineString Feature per leg, coordinates [lon, lat]
+      cost_breakdown: FULL landed cost per category if the shipment takes this route
+                 ({"FREIGHT": "312000.00", ...}); approve_route writes it to CostLine
+      possible_disruptions: [{"corridor", "p_close", "delay_days", "cost_impact", "contingency_label"}]
+    """
+
+    class Kind(models.TextChoices):
+        ROUTE = "ROUTE"
+        WAIT = "WAIT"  # wait out a closure on the current route
+
     shipment = models.ForeignKey(Shipment, on_delete=models.CASCADE, related_name="route_options")
-    label = models.CharField(max_length=120)
-    corridor = models.ForeignKey(Corridor, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
-    mode = models.CharField(max_length=4, choices=TransportMode.choices)
-    waypoints = models.JSONField(default=list, blank=True, help_text="[[lat, lon], ...]")
-    transit_days = models.PositiveIntegerField(default=0)
-    delay_days = models.IntegerField(default=0)
-    cost_breakdown = models.JSONField(default=dict, blank=True, help_text="{category: amount}")
-    total_extra_cost = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES, default=Decimal("0"))
+    run = models.ForeignKey(AgentRun, null=True, blank=True, on_delete=models.PROTECT, related_name="route_options")
+    kind = models.CharField(max_length=5, choices=Kind.choices, default=Kind.ROUTE)
+    label = models.CharField(max_length=160)
+    legs = models.JSONField(default=list, blank=True)
+    geometry = models.JSONField(default=dict, blank=True)
+    transit_days = models.DecimalField(max_digits=6, decimal_places=1, default=Decimal("0"))
+    days_p10 = models.DecimalField(max_digits=6, decimal_places=1, null=True, blank=True)
+    days_p90 = models.DecimalField(max_digits=6, decimal_places=1, null=True, blank=True)
+    delay_days = models.DecimalField(max_digits=6, decimal_places=1, default=Decimal("0"),
+                                     help_text="vs the currently approved route (replan / wait)")
+    cost_breakdown = models.JSONField(default=dict, blank=True)
+    landed_cost = models.DecimalField(max_digits=MONEY_DIGITS, decimal_places=MONEY_PLACES, default=Decimal("0"))
+    co2_kg = models.DecimalField(max_digits=14, decimal_places=1, default=Decimal("0"))
+    risk_score = models.DecimalField(max_digits=4, decimal_places=3, default=Decimal("0"), help_text="0–1")
+    score = models.JSONField(default=dict, blank=True, help_text="{criterion: value, ..., total}")
+    possible_disruptions = models.JSONField(default=list, blank=True)
+    contingency = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     rationale = models.TextField(blank=True)
+    recommended = models.BooleanField(default=False)
     chosen = models.BooleanField(default=False)
     created_by = models.CharField(max_length=60, default="agent")
     created_at = models.DateTimeField(auto_now_add=True)
 
     # for type checkers only (Django creates these at runtime)
     shipment_id: int
-    corridor_id: int | None
+    run_id: int | None
+    contingency_id: int | None
     preapprovals: "RelatedManager[PreApproval]"
 
     class Meta:
-        ordering = ["shipment", "total_extra_cost"]
+        ordering = ["shipment", "-created_at", "-recommended", "landed_cost"]
 
     def __str__(self):
         return f"{self.shipment} · {self.label}"
+
+    def corridor_codes(self, from_leg: int = 0) -> list[str]:
+        """Corridors used by legs[from_leg:], in order, without duplicates."""
+        seen: list[str] = []
+        for leg in (self.legs or [])[from_leg:]:
+            for code in leg.get("corridors", []):
+                if code not in seen:
+                    seen.append(code)
+        return seen
+
+
+# --------------------------------------------------------------------------
+# Money
+# --------------------------------------------------------------------------
 
 
 class PreApproval(models.Model):
@@ -582,6 +691,7 @@ class PendingAction(models.Model):
     class Meta:
         ordering = ["-created_at"]
         permissions = [
+            ("approve_route", "Can approve a route (plan or replan)"),
             ("approve_spend", "Can approve spend (pre-approvals, sending reports)"),
             ("approve_payment", "Can approve payments"),
             ("export_payments", "Can export payment batches"),
@@ -627,7 +737,13 @@ class AuditEventQuerySet(models.QuerySet):
 
 
 class AuditEvent(models.Model):
-    ts = models.DateTimeField(auto_now_add=True, db_index=True)
+    """One step or decision. Write only through core.services.audit.log (it
+    assigns seq and the hash chain: hash = sha256(prev_hash + canonical event))."""
+
+    seq = models.BigIntegerField(unique=True, help_text="1, 2, 3 ... in chain order")
+    ts = models.DateTimeField(db_index=True)
+    run = models.ForeignKey(AgentRun, null=True, blank=True, on_delete=models.PROTECT, related_name="events")
+    parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="children")
     actor_type = models.CharField(max_length=6, choices=ActorType.choices)
     actor_name = models.CharField(max_length=80)
     actor_user = models.ForeignKey(
@@ -640,20 +756,37 @@ class AuditEvent(models.Model):
     document = models.ForeignKey(
         ExpenseDocument, null=True, blank=True, on_delete=models.PROTECT, related_name="audit_events"
     )
-    input_sha256 = models.CharField(max_length=64, blank=True)
+    route_option = models.ForeignKey(
+        RouteOption, null=True, blank=True, on_delete=models.PROTECT, related_name="audit_events"
+    )
+    preapproval = models.ForeignKey(
+        PreApproval, null=True, blank=True, on_delete=models.PROTECT, related_name="audit_events"
+    )
+    input = models.JSONField(null=True, blank=True, help_text="truncated to ~4 KB")
+    input_sha256 = models.CharField(max_length=64, blank=True, help_text="of the FULL input / file bytes")
+    output = models.JSONField(null=True, blank=True, help_text="truncated to ~4 KB")
     before = models.JSONField(null=True, blank=True)
     after = models.JSONField(null=True, blank=True)
+    sources = models.JSONField(null=True, blank=True, help_text='[{"title", "url"}] / file hashes')
+    meta = models.JSONField(null=True, blank=True, help_text="{tool, model, latency_ms, tokens_in, tokens_out}")
     detail = models.TextField(blank=True)
+    prev_hash = models.CharField(max_length=64, blank=True)
+    hash = models.CharField(max_length=64, blank=True)
 
     objects = AuditEventQuerySet.as_manager()
 
     # for type checkers only (Django creates these at runtime)
+    run_id: int | None
+    parent_id: int | None
     actor_user_id: int | None
     shipment_id: int | None
     document_id: int | None
+    route_option_id: int | None
+    preapproval_id: int | None
+    children: "RelatedManager[AuditEvent]"
 
     class Meta:
-        ordering = ["-ts", "-id"]
+        ordering = ["-seq"]
 
     def save(self, *args, **kwargs):
         if not self._state.adding:

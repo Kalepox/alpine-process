@@ -114,8 +114,12 @@ GOOGLE_MAPS_API_KEY = env_str("GOOGLE_MAPS_API_KEY")
 DEMO_MODE = env_str("DEMO_MODE", "live")  # "live" | "replay"
 if DEMO_MODE not in {"live", "replay"}:
     raise ValueError(f"DEMO_MODE must be 'live' or 'replay', got {DEMO_MODE!r}")
-# Replay clock: 60 = one wall-clock minute moves a shipment one hour along its route.
-DEMO_REPLAY_SPEEDUP = float(env_str("DEMO_REPLAY_SPEEDUP", "60"))
+# Replay clock for the live map (SEA/RAIL; AIR/ROAD replay in real time).
+# 1000 = one wall-clock minute moves a ship ~16 h along its route.
+REPLAY_SPEED = float(env_str("REPLAY_SPEED", env_str("DEMO_REPLAY_SPEEDUP", "1000")))
+# Live mode: no real fix for this long -> advance along the approved route ("interpolated").
+INTERPOLATE_AFTER_SECONDS = 3600
+PROMPT_VERSION = env_str("PROMPT_VERSION", "v1")  # stored in every AgentRun
 
 # Collectors (manage.py run_collectors)
 COLLECTOR_POLL_SECONDS = {"SEA": 30, "AIR": 60, "ROAD": 60, "RAIL": 60}  # OpenSky: keep AIR >= 60 (credits)
